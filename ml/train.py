@@ -26,7 +26,7 @@ def _fit_model_from_xy(X_train, y_train):
 
 def _log_mlflow_run(model, params, metrics, run_name):
     def _write_run():
-        print("🔥 MLflow run starting")
+        print("MLflow run starting")
         active_run = mlflow.active_run()
         with mlflow.start_run(run_name=run_name, nested=active_run is not None):
             logging_warnings = []
@@ -37,7 +37,7 @@ def _log_mlflow_run(model, params, metrics, run_name):
             except Exception as err:
                 logging_warnings.append(f"param_logging_failed: {err}")
 
-            print("🔥 Logging metrics...")
+            print("Logging metrics...")
             try:
                 for key, value in metrics.items():
                     if value is not None:
