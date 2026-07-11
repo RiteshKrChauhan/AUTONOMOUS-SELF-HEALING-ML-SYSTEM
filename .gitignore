@@ -1,7 +1,5 @@
 # Documentation files
-*.md
-!README.md
-
+*.html
 # Python
 __pycache__/
 *.py[cod]
@@ -32,12 +30,6 @@ wheels/
 # Environment files
 .env
 .env.*
-
-# MLflow
-mlruns/
-mlflow.db
-mlflow.db-shm
-mlflow.db-wal
 
 # Logs
 logs/
@@ -70,8 +62,3 @@ htmlcov/
 # Frontend (Vite/React)
 frontend/node_modules/
 frontend/dist/
-
-# Logs and OS/editor files
-*.log
-.DS_Store
-Thumbs.db

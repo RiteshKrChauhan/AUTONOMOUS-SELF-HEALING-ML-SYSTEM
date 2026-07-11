@@ -6,7 +6,8 @@ import MetricCard from "../components/MetricCard";
 import SectionCard from "../components/SectionCard";
 
 export default function RateControlPage() {
-  const { dashboardData, controls } = useOutletContext();
+  const { dashboardData, controls, connectionState, onControlsChange } = useOutletContext();
+  const controlsDisabled = connectionState !== "live";
 
   return (
     <div className="page-stack">
@@ -20,7 +21,7 @@ export default function RateControlPage() {
 
         <SectionCard
           title="Rate Controls"
-          subtitle="Static preview for backend integration"
+          subtitle="Live stream pressure and throttling policy"
         >
           <div className="control-stack">
             <div>
@@ -30,12 +31,14 @@ export default function RateControlPage() {
               </div>
               <input
                 type="range"
-                min={900}
-                max={4500}
-                step={50}
+                min={1}
+                max={30}
+                step={1}
                 value={controls.simulatedRate}
-                disabled
-                readOnly
+                disabled={controlsDisabled}
+                onChange={(event) =>
+                  onControlsChange({ simulatedRate: Number(event.target.value) })
+                }
                 className="range-input"
               />
             </div>
@@ -45,8 +48,12 @@ export default function RateControlPage() {
                 <span>Enable rate limiting</span>
                 <button
                   type="button"
-                  disabled
+                  disabled={controlsDisabled}
+                  onClick={() =>
+                    onControlsChange({ rateLimitEnabled: !controls.rateLimitEnabled })
+                  }
                   className={`toggle-pill ${controls.rateLimitEnabled ? "is-on" : "is-off"}`}
+                  title="Toggle rate limiting"
                 >
                   <span
                     className={`toggle-knob ${controls.rateLimitEnabled ? "is-on" : "is-off"}`}
@@ -62,12 +69,14 @@ export default function RateControlPage() {
               </div>
               <input
                 type="range"
-                min={1200}
-                max={4200}
-                step={100}
-                disabled
-                readOnly
+                min={1}
+                max={40}
+                step={1}
+                disabled={controlsDisabled}
                 value={controls.rateLimit}
+                onChange={(event) =>
+                  onControlsChange({ rateLimit: Number(event.target.value) })
+                }
                 className="range-input"
               />
             </div>
