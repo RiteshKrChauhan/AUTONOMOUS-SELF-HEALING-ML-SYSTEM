@@ -63,15 +63,16 @@ function ShadowEvaluationCard({ shadow }) {
 }
 
 export default function SelfHealingGovernancePage() {
-  const { dashboardData, eventTypes, onResetRuntime } = useOutletContext();
+  const { dashboardData, eventTypes, onResetRuntime, connectionState } = useOutletContext();
   const [eventFilter, setEventFilter] = useState("ALL");
   const [timeFilter, setTimeFilter] = useState("ALL");
 
-  const shadow = dashboardData.selfHealing.shadowEvaluation;
+  const shadow = dashboardData?.selfHealing?.shadowEvaluation;
+  const auditLogs = dashboardData?.auditLogs ?? [];
 
   const filteredLogs = useMemo(() => {
     const now = Date.now();
-    return dashboardData.auditLogs.filter((log) => {
+    return auditLogs.filter((log) => {
       const matchesEvent = eventFilter === "ALL" || log.eventType === eventFilter;
       if (!matchesEvent) return false;
       if (timeFilter === "ALL") return true;
@@ -82,7 +83,26 @@ export default function SelfHealingGovernancePage() {
       if (timeFilter === "24H") return diffMinutes <= 1440;
       return true;
     });
-  }, [dashboardData.auditLogs, eventFilter, timeFilter]);
+  }, [auditLogs, eventFilter, timeFilter]);
+
+  if (!dashboardData?.selfHealing) {
+    return (
+      <div className="page-stack">
+        <SectionCard
+          title={connectionState === "offline" ? "Backend offline" : "Waiting for live data"}
+          subtitle="Governance logs and model history depend on processed backend snapshots."
+        >
+          <div className="inset-card">
+            <p className="inset-text">
+              {connectionState === "offline"
+                ? "No processed governance snapshot is available."
+                : "Live governance data is still loading."}
+            </p>
+          </div>
+        </SectionCard>
+      </div>
+    );
+  }
 
   return (
     <div className="page-stack">
@@ -91,25 +111,9 @@ export default function SelfHealingGovernancePage() {
         <ShadowEvaluationCard shadow={shadow} />
       )}
 
-      <div className="dashboard-grid dashboard-grid-2">
-        <SectionCard title="Self-Healing Timeline" subtitle="Decision flow and automated interventions">
-          <ul className="timeline-list">
-            {dashboardData.selfHealing.timeline.map((item) => (
-              <li key={`${item.time}-${item.event}`} className="timeline-item">
-                <div className="timeline-head">
-                  <span className="mono-text timeline-time">{item.time}</span>
-                  <StatusPill value={item.state} />
-                </div>
-                <p className="timeline-message">{item.event}</p>
-              </li>
-            ))}
-          </ul>
-        </SectionCard>
-
-        <SectionCard title="Model Version History" subtitle="Deployment progression over time">
-          <ModelVersionChart data={dashboardData.selfHealing.modelHistory} />
-        </SectionCard>
-      </div>
+      <SectionCard title="Model Version History" subtitle="Deployment progression over time">
+        <ModelVersionChart data={dashboardData.selfHealing.modelHistory} />
+      </SectionCard>
 
       <div className="dashboard-grid dashboard-grid-3">
         <SectionCard title="Action Reasons" subtitle="Why autonomous actions were triggered">
@@ -137,6 +141,7 @@ export default function SelfHealingGovernancePage() {
       <SectionCard
         title="Governance Logs"
         subtitle="Unified audit trail for self-healing decisions and operational actions"
+        className="governance-log-card"
         action={
           <div className="filter-group">
             <button

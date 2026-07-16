@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import AnomalyModal from "./components/AnomalyModal";
 import AppLayout from "./layout/AppLayout";
 import DriftMonitoringPage from "./pages/DriftMonitoringPage";
 import RateControlPage from "./pages/RateControlPage";
@@ -7,53 +8,82 @@ import SelfHealingGovernancePage from "./pages/SelfHealingGovernancePage";
 import SystemOverviewPage from "./pages/SystemOverviewPage";
 import {
   EVENT_TYPES,
-  STATIC_CONTROLS,
-  STATIC_DASHBOARD_DATA,
   getDashboard,
   injectAnomalies,
   resetRuntime,
   updateControls,
 } from "./services/api";
 
+const DASHBOARD_POLL_MS = 500;
+
 export default function App() {
   const [theme, setTheme] = useState("dark");
-  const [dashboardData, setDashboardData] = useState(STATIC_DASHBOARD_DATA);
-  const [controls, setControls] = useState(STATIC_CONTROLS);
+  const [dashboardData, setDashboardData] = useState(null);
+  const [controls, setControls] = useState(null);
   const [connectionState, setConnectionState] = useState("connecting");
   const [isInjecting, setIsInjecting] = useState(false);
+  const [scenarioModalOpen, setScenarioModalOpen] = useState(false);
+  const mountedRef = useRef(false);
+  const dashboardRequestInFlight = useRef(false);
+  const dashboardRequestPromise = useRef(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
-  useEffect(() => {
-    let mounted = true;
-
-    async function refresh() {
-      try {
-        const data = await getDashboard();
-        if (!mounted) {
-          return;
-        }
-        setDashboardData(data);
-        setControls({
-          simulatedRate: data.rateControl.simulatedRate,
-          rateLimit: data.rateControl.rateLimit,
-          rateLimitEnabled: data.rateControl.rateLimitEnabled,
-        });
-        setConnectionState("live");
-      } catch (error) {
-        if (mounted) {
-          setConnectionState("offline");
-        }
+  async function refreshDashboard({ queueAfterCurrent = false } = {}) {
+    if (dashboardRequestInFlight.current) {
+      if (queueAfterCurrent && dashboardRequestPromise.current) {
+        await dashboardRequestPromise.current.catch(() => {});
+        return refreshDashboard();
       }
+      return null;
     }
 
-    refresh();
-    const intervalId = window.setInterval(refresh, 1000);
+    dashboardRequestInFlight.current = true;
+    const requestPromise = (async () => {
+      try {
+        const data = await getDashboard();
+        if (mountedRef.current) {
+          setDashboardData(data);
+          setControls({
+            simulatedRate: data.rateControl.simulatedRate,
+            rateLimit: data.rateControl.rateLimit,
+            rateLimitEnabled: data.rateControl.rateLimitEnabled,
+          });
+          setConnectionState("live");
+        }
+        return data;
+      } catch (error) {
+        if (mountedRef.current) {
+          setConnectionState("offline");
+        }
+        throw error;
+      } finally {
+        dashboardRequestInFlight.current = false;
+        if (dashboardRequestPromise.current === requestPromise) {
+          dashboardRequestPromise.current = null;
+        }
+      }
+    })();
+
+    dashboardRequestPromise.current = requestPromise;
+    return requestPromise;
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    refreshDashboard().catch(() => {});
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      refreshDashboard().catch(() => {});
+    }, DASHBOARD_POLL_MS);
 
     return () => {
-      mounted = false;
+      mountedRef.current = false;
       window.clearInterval(intervalId);
     };
   }, []);
@@ -62,30 +92,16 @@ export default function App() {
     setIsInjecting(true);
     try {
       await injectAnomalies(payload);
-      const data = await getDashboard();
-      setDashboardData(data);
-      setConnectionState("live");
+      await refreshDashboard({ queueAfterCurrent: true });
     } finally {
       setIsInjecting(false);
     }
   }
 
   async function handleControlsChange(nextControls) {
-    const optimisticControls = { ...controls, ...nextControls };
-    setControls(optimisticControls);
-    setDashboardData((prev) => ({
-      ...prev,
-      rateControl: {
-        ...prev.rateControl,
-        ...optimisticControls,
-      },
-    }));
-
     try {
       await updateControls(nextControls);
-      const data = await getDashboard();
-      setDashboardData(data);
-      setConnectionState("live");
+      await refreshDashboard({ queueAfterCurrent: true });
     } catch (error) {
       setConnectionState("offline");
     }
@@ -93,9 +109,7 @@ export default function App() {
 
   async function handleResetRuntime() {
     await resetRuntime();
-    const data = await getDashboard();
-    setDashboardData(data);
-    setConnectionState("live");
+    await refreshDashboard({ queueAfterCurrent: true });
   }
 
   const outletContext = useMemo(
@@ -114,6 +128,12 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <AnomalyModal
+        isOpen={scenarioModalOpen}
+        onClose={() => setScenarioModalOpen(false)}
+        onInject={handleInjectAnomalies}
+        isInjecting={isInjecting}
+      />
       <Routes>
         <Route
           path="/"
@@ -121,11 +141,11 @@ export default function App() {
             <AppLayout
               theme={theme}
               onThemeToggle={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
-              modelVersion={dashboardData.overview.activeModelVersion}
+              modelVersion={dashboardData?.overview?.activeModelVersion}
               connectionState={connectionState}
-              anomaly={dashboardData.overview.scenario}
+              anomaly={dashboardData?.overview?.scenario}
               isInjecting={isInjecting}
-              onInjectAnomalies={handleInjectAnomalies}
+              onOpenScenarioModal={() => setScenarioModalOpen(true)}
               outletContext={outletContext}
             />
           }

@@ -16,7 +16,14 @@ export default function ConfidenceHistogramChart({ data }) {
         <XAxis dataKey="bucket" tick={{ fill: "#94a3b8", fontSize: 11 }} />
         <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} />
         <Tooltip />
-        <Bar dataKey="count" fill="#22c55e" radius={[6, 6, 0, 0]} />
+        <Bar
+          dataKey="count"
+          fill="#22c55e"
+          radius={[6, 6, 0, 0]}
+          isAnimationActive
+          animationDuration={420}
+          animationEasing="ease-out"
+        />
       </BarChart>
     </ResponsiveContainer>
   );

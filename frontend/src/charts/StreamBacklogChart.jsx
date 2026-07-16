@@ -3,7 +3,6 @@ import {
   AreaChart,
   CartesianGrid,
   ReferenceDot,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -12,18 +11,18 @@ import {
 import LiveChartFrame from "./LiveChartFrame";
 import { chartAnimation, getLastPoint, getSampleDomain, makeTimeFormatter } from "./chartUtils";
 
-export default function DriftScoreLineChart({ data }) {
+export default function StreamBacklogChart({ data }) {
   const last = getLastPoint(data);
   const timeFormatter = makeTimeFormatter(data);
 
   return (
-    <LiveChartFrame points={data?.length ?? 0} tone="rose">
+    <LiveChartFrame points={data?.length ?? 0} tone="amber">
       <ResponsiveContainer width="100%" height={280}>
         <AreaChart data={data} margin={{ left: 8, right: 8, top: 8, bottom: 8 }}>
           <defs>
-            <linearGradient id="driftFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#fb7185" stopOpacity={0.46} />
-              <stop offset="100%" stopColor="#fb7185" stopOpacity={0.04} />
+            <linearGradient id="streamBacklogFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#f97316" stopOpacity={0.34} />
+              <stop offset="95%" stopColor="#f97316" stopOpacity={0.02} />
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(100,116,139,0.35)" />
@@ -34,11 +33,10 @@ export default function DriftScoreLineChart({ data }) {
             tickFormatter={timeFormatter}
             tick={{ fill: "#94a3b8", fontSize: 11 }}
           />
-          <YAxis domain={[0, 1]} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+          <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} />
           <Tooltip labelFormatter={(value) => `Sample ${value} - ${timeFormatter(value)}`} />
-          <ReferenceLine y={0.6} stroke="#f43f5e" strokeDasharray="5 5" />
-          <Area type="monotone" dataKey="driftScore" name="Drift score" stroke="#fb7185" fill="url(#driftFill)" strokeWidth={2.4} dot={false} connectNulls {...chartAnimation} />
-          {last ? <ReferenceDot x={last.sampleIndex} y={last.driftScore} r={4} fill="#fb7185" stroke="#0f172a" /> : null}
+          <Area type="monotone" dataKey="streamBacklog" name="Stream backlog" stroke="#f97316" fill="url(#streamBacklogFill)" strokeWidth={2.4} dot={false} connectNulls {...chartAnimation} />
+          {last ? <ReferenceDot x={last.sampleIndex} y={last.streamBacklog} r={4} fill="#f97316" stroke="#0f172a" /> : null}
         </AreaChart>
       </ResponsiveContainer>
     </LiveChartFrame>

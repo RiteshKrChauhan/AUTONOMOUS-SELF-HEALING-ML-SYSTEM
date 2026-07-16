@@ -18,7 +18,7 @@ Full pipeline:
 from collections import Counter, deque
 from datetime import datetime
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock, Thread
 import time
 
 import numpy as np
@@ -45,6 +45,13 @@ from simulation.scenarios.registry import SCENARIO_REGISTRY, get_scenario_list
 FEATURE_COLUMNS = [f"op_setting_{i}" for i in range(1, 4)] + [
     f"sensor_{i}" for i in range(1, 22)
 ]
+
+STREAM_QUEUE_MAXLEN = 500
+STREAM_TICK_SECONDS = 0.05
+DASHBOARD_SNAPSHOT_SECONDS = 0.5
+INITIAL_STREAM_WARMUP_SAMPLES = 24
+MAX_EVENTS_PER_WORKER_TICK = 8
+MAX_PROCESSING_BURST_EVENTS = 24.0
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +82,32 @@ class StreamingMLRuntime:
         self.stream_rate = 8.0
         self.rate_limit = 14.0
         self.rate_limit_enabled = True
-        self.kafka_lag = 0.0
+        self.event_queue = deque(maxlen=STREAM_QUEUE_MAXLEN)
+        self.stream_backlog = 0
+        self.arrival_carry = 0.0
+        self.processing_carry = 0.0
+        self.applied_rate_limit = self.rate_limit
+        self.worker_capacity_limit = 40.0
+        self.current_incoming_rate = self.stream_rate
+        self.current_processed_rate = 0.0
+        self.rate_control_state = "Nominal"
+        self.rate_control_reason = "Incoming traffic is within the configured limit"
+        self.last_rate_control_audit_sample = -1000
+        self.load_shedding_total = 0
+        self.load_shedding_events_since_snapshot = 0
+        self.last_load_shedding_at = None
+        self.last_load_shedding_audit_total = 0
+        self.last_prediction_std = 5.0
+        self.incoming_events_since_snapshot = 0
+        self.processed_events_since_snapshot = 0
+        self.last_snapshot_at = time.monotonic()
+        self.latest_point = None
+        self.dashboard_snapshot = None
+        self.snapshot_lock = Lock()
+        self.stop_event = Event()
+        self.worker_thread = None
+        self.retrain_job_active = False
+        self.retrain_thread = None
 
         # Model state
         self.model = None
@@ -135,6 +167,10 @@ class StreamingMLRuntime:
             "MODEL",
         )
 
+        self._warm_up_stream()
+        self._publish_dashboard_snapshot()
+        self.start()
+
     # -----------------------------------------------------------------------
     # Data loading and initial training
     # -----------------------------------------------------------------------
@@ -178,6 +214,94 @@ class StreamingMLRuntime:
         # Fit Isolation Forest on training data
         self.anomaly_detector.fit(train_df)
         print("Anomaly detector fitted. Runtime ready.")
+
+    def _scaled_feature_array(self, data):
+        feature_names = getattr(self.scaler, "feature_names_in_", FEATURE_COLUMNS)
+        values = np.array([[float(data.get(feature, 0.0)) for feature in feature_names]])
+        return (values - self.scaler.mean_) / self.scaler.scale_
+
+    def _predict_with_confidence_fast(self, data):
+        scaled = self._scaled_feature_array(data)
+        if hasattr(self.model, "estimators_"):
+            tree_predictions = np.array(
+                [tree.predict(scaled)[0] for tree in self.model.estimators_]
+            )
+            pred = float(np.mean(tree_predictions))
+            pred_std = float(np.std(tree_predictions))
+        else:
+            pred = float(self.model.predict(scaled)[0])
+            pred_std = self.last_prediction_std
+
+        margin = 1.645 * pred_std
+        return pred, pred - margin, pred + margin, pred_std
+
+    def _predict_batch_with_confidence(self, events):
+        if not events:
+            return []
+
+        feature_names = getattr(self.scaler, "feature_names_in_", FEATURE_COLUMNS)
+        values = np.array(
+            [
+                [float(event["data"].get(feature, 0.0)) for feature in feature_names]
+                for event in events
+            ]
+        )
+        scaled = (values - self.scaler.mean_) / self.scaler.scale_
+
+        if hasattr(self.model, "estimators_"):
+            tree_predictions = np.vstack(
+                [tree.predict(scaled) for tree in self.model.estimators_]
+            )
+            preds = np.mean(tree_predictions, axis=0)
+            stds = np.std(tree_predictions, axis=0)
+        else:
+            preds = self.model.predict(scaled)
+            stds = np.full(len(events), self.last_prediction_std)
+
+        margins = 1.645 * stds
+        return [
+            (
+                float(pred),
+                float(pred - margin),
+                float(pred + margin),
+                float(std),
+            )
+            for pred, margin, std in zip(preds, margins, stds)
+        ]
+
+    def _detect_anomalies_batch(self, events):
+        if not events:
+            return []
+
+        defaults = [(False, 0.0)] * len(events)
+        detector = self.anomaly_detector
+        if not detector.is_fitted or detector.detector is None:
+            return defaults
+
+        try:
+            feature_names = detector.feature_names or FEATURE_COLUMNS
+            rows = [
+                {feature: event["data"].get(feature, 0.0) for feature in feature_names}
+                for event in events
+            ]
+            features_df = pd.DataFrame(rows, columns=feature_names)
+            predictions = detector.detector.predict(features_df)
+            scores = detector.detector.score_samples(features_df)
+            return [
+                (bool(prediction == -1), float(score))
+                for prediction, score in zip(predictions, scores)
+            ]
+        except Exception:
+            return defaults
+
+    def _predict_model_fast(self, model, scaler, data):
+        feature_names = getattr(scaler, "feature_names_in_", FEATURE_COLUMNS)
+        values = np.array([[float(data.get(feature, 0.0)) for feature in feature_names]])
+        scaled = (values - scaler.mean_) / scaler.scale_
+        if hasattr(model, "estimators_"):
+            tree_predictions = np.array([tree.predict(scaled)[0] for tree in model.estimators_])
+            return float(np.mean(tree_predictions))
+        return float(model.predict(scaled)[0])
 
     # -----------------------------------------------------------------------
     # Utility helpers
@@ -236,7 +360,7 @@ class StreamingMLRuntime:
     # -----------------------------------------------------------------------
 
     def _confidence_value(self, std, error):
-        return float(np.clip(1.0 - (std / 95.0) - (error / 320.0), 0.35, 0.99))
+        return float(1.0 - (std / 95.0) - (error / 320.0))
 
     def _status_from_metrics(self, drift_score, rolling_avg, action):
         if action in {"RETRAIN_URGENT", "ALERT"} or drift_score >= 0.82:
@@ -283,15 +407,91 @@ class StreamingMLRuntime:
         return output
 
     def _histogram(self):
-        buckets = [(0.3, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.01)]
         values = list(self.confidences)
+        buckets = [
+            (index / 10, (index + 1) / 10, f"{index / 10:.2f}-{(index + 1) / 10:.2f}")
+            for index in range(10)
+        ]
         return [
             {
-                "bucket": f"{low:.2f}-{high if high < 1 else 1.0:.2f}",
-                "count": sum(1 for v in values if low <= v < high),
+                "bucket": bucket,
+                "count": sum(
+                    1
+                    for v in values
+                    if (low <= v <= high if high == 1.0 else low <= v < high)
+                ),
             }
-            for low, high in buckets
+            for low, high, bucket in buckets
         ]
+
+    def _update_rate_controller(self, elapsed):
+        if not self.rate_limit_enabled:
+            self.applied_rate_limit = self.worker_capacity_limit
+            self.rate_control_state = "Bypassed"
+            self.rate_control_reason = "Rate limiting is disabled (ML worker capacity)"
+            return self.applied_rate_limit
+
+        latest = self.series[-1] if self.series else {}
+        latest_latency = float(latest.get("latency", 45))
+        latest_drift = float(latest.get("driftScore", 0.0))
+        
+        # Pressure is based ONLY on true ML computational strain (drift retraining), not queue size
+        drift_pressure = min(latest_drift, 1.0) * 0.45
+        pressure = drift_pressure
+        pressure = float(np.clip(pressure, 0.0, 1.0))
+
+        ceiling = max(1.0, self.rate_limit)
+        if pressure >= 0.78:
+            target = max(1.0, ceiling * 0.45)
+            state = "Protecting"
+            reason = "High backlog or latency pressure reduced the applied limit"
+        elif pressure >= 0.45:
+            target = max(1.0, ceiling * (1.0 - pressure * 0.45))
+            state = "Throttling"
+            reason = "Traffic pressure is above the adaptive threshold"
+        elif self.stream_backlog > 0 and self.stream_rate < ceiling:
+            drain_headroom = min(ceiling - self.stream_rate, max(0.0, self.stream_backlog * 0.15))
+            target = self.stream_rate + drain_headroom
+            state = "Draining"
+            reason = "Processing below the ceiling to clear queued events"
+        else:
+            target = ceiling
+            state = "Nominal"
+            reason = "Incoming traffic is within the configured limit"
+
+        step_ratio = 0.45 if target < self.applied_rate_limit else 0.25
+        max_step = max(0.5, ceiling * step_ratio * max(elapsed, 0.25))
+        delta = float(np.clip(target - self.applied_rate_limit, -max_step, max_step))
+        self.applied_rate_limit = float(np.clip(self.applied_rate_limit + delta, 1.0, ceiling))
+
+        if self.stream_rate > self.applied_rate_limit:
+            state = "Throttling" if state == "Nominal" else state
+            reason = "Incoming rate is above the applied adaptive limit"
+
+        previous_state = self.rate_control_state
+        self.rate_control_state = state
+        self.rate_control_reason = reason
+
+        should_audit = (
+            state in {"Throttling", "Protecting"}
+            and (
+                previous_state != state
+                or self.sample_index - self.last_rate_control_audit_sample >= 30
+            )
+        )
+        if should_audit:
+            self.last_rate_control_audit_sample = self.sample_index
+            self.action_reasons["Rate control"] += 1
+            self.audit.append_timeline(f"Rate controller {state.lower()}", "Warning")
+            self.audit.append_audit(
+                "Adaptive Rate Control",
+                reason,
+                f"Incoming {self.stream_rate:.1f} eps, applied limit {self.applied_rate_limit:.1f} eps, backlog {int(self.stream_backlog)}",
+                "Warning" if state == "Throttling" else "Critical",
+                "RATE_LIMIT",
+            )
+
+        return self.applied_rate_limit
 
     # -----------------------------------------------------------------------
     # Retraining pipeline: performance gate → shadow evaluation
@@ -302,8 +502,7 @@ class StreamingMLRuntime:
             self.sample_index, drift_score
         )
 
-        # Block new retrain while shadow evaluation is in progress
-        if self.shadow_evaluator.is_evaluating:
+        if self.shadow_evaluator.is_evaluating or self.retrain_job_active:
             return required, elapsed
 
         strong_signal = action in {"RETRAIN", "RETRAIN_URGENT"} or drift_score > 0.68
@@ -312,103 +511,222 @@ class StreamingMLRuntime:
         if not (strong_signal and should_retrain_now and retrain_signal and len(self.buffer) >= 55):
             return required, elapsed
 
-        # Build candidate training DataFrame from buffer
         buffer_list = list(self.buffer)
+        production_model = self.model
+        production_scaler = self.scaler
+        sample_index = self.sample_index
+
+        self.retrain_job_active = True
+        self.cooldown.mark_retrain(sample_index)
+        self.system_state = "Self-healing"
+        self.last_action = "Retrain candidate training started in background"
+        self.action_reasons["Background retrain"] += 1
+        self.audit.append_timeline("Background retrain started", "Warning")
+        self.audit.append_audit(
+            "Retrain Started",
+            f"Drift {drift_score:.2f}, rolling MAE {rolling_avg if rolling_avg is not None else 'N/A'}",
+            "Training candidate model without blocking stream processing",
+            "Warning",
+            "MODEL",
+        )
+
+        self.retrain_thread = Thread(
+            target=self._run_retrain_job,
+            args=(buffer_list, production_model, production_scaler),
+            daemon=True,
+        )
+        self.retrain_thread.start()
+        return required, elapsed
+
+    def _run_retrain_job(self, buffer_list, production_model, production_scaler):
+        try:
+            result = self._train_retrain_candidate(
+                buffer_list, production_model, production_scaler
+            )
+            self._apply_retrain_result(result)
+        finally:
+            with self.lock:
+                self.retrain_job_active = False
+
+    def _train_retrain_candidate(self, buffer_list, production_model, production_scaler):
         try:
             buffer_df = pd.DataFrame(buffer_list)
         except Exception:
-            return required, elapsed
+            return {
+                "accepted": False,
+                "event": "Retrain Skipped",
+                "reason": "Unable to build training frame from buffer",
+                "action": "Kept current production model",
+                "status": "Warning",
+            }
 
-        # Schema guard
         missing = [c for c in self.expected_train_columns if c not in buffer_df.columns]
         if missing:
-            self._append_audit(
-                "Retrain Skipped",
-                f"Schema mismatch — missing columns: {missing[:3]}",
-                "Kept current production model",
-                "Warning",
-                "MODEL",
-            )
-            return required, elapsed
+            return {
+                "accepted": False,
+                "event": "Retrain Skipped",
+                "reason": f"Schema mismatch - missing columns: {missing[:3]}",
+                "action": "Kept current production model",
+                "status": "Warning",
+            }
 
         buffer_df = buffer_df[
             [c for c in self.expected_train_columns if c in buffer_df.columns]
         ]
 
-        # Train candidate model
         try:
             new_model, new_scaler, new_mae = train_model_with_holdout(
                 buffer_df, min_retrain_rows=30
             )
         except Exception as err:
-            self.audit.append_audit(
-                "Retrain Failed",
-                f"Training error: {str(err)[:120]}",
-                "Kept current production model",
-                "Warning",
-                "MODEL",
-            )
-            return required, elapsed
+            return {
+                "accepted": False,
+                "event": "Retrain Failed",
+                "reason": f"Training error: {str(err)[:120]}",
+                "action": "Kept current production model",
+                "status": "Warning",
+            }
 
         if new_model is None:
-            return required, elapsed
+            return {
+                "accepted": False,
+                "event": "Retrain Skipped",
+                "reason": "Candidate model was not produced",
+                "action": "Kept current production model",
+                "status": "Warning",
+            }
 
-        # Performance gate: compare candidate vs current model on validation slice
         validation_df = pd.DataFrame(buffer_list[-20:])
         validation_df = validation_df[
             [c for c in self.expected_train_columns if c in validation_df.columns]
         ]
         should_accept, current_mae, candidate_mae, gate_reason = (
             self.performance_gate.should_accept_new_model(
-                self.model, self.scaler, new_model, new_scaler, new_mae, validation_df
+                production_model,
+                production_scaler,
+                new_model,
+                new_scaler,
+                new_mae,
+                validation_df,
             )
         )
 
-        cand_str = f"{candidate_mae:.2f}" if candidate_mae is not None else "N/A"
-        curr_str = f"{current_mae:.2f}" if current_mae is not None else "N/A"
+        return {
+            "accepted": should_accept,
+            "event": "Shadow Started" if should_accept else "Retrain Rejected",
+            "reason": gate_reason,
+            "action": "Running candidate in shadow evaluation"
+            if should_accept
+            else "Production model retained - no shadow evaluation",
+            "status": "Warning",
+            "new_model": new_model,
+            "new_scaler": new_scaler,
+            "current_mae": current_mae,
+            "candidate_mae": candidate_mae,
+        }
 
-        if should_accept:
-            # Gate passed → start shadow A/B evaluation
-            self.shadow_evaluator.start_shadow_evaluation(new_model, new_scaler)
-            self.cooldown.mark_retrain(self.sample_index)
-            self.system_state = "Shadowing"
-            self.last_action = (
-                f"Shadow evaluation started — gate passed ({gate_reason})"
-            )
-            self.action_reasons["Shadow evaluation"] += 1
-            self.audit.append_timeline("Shadow A/B evaluation started", "Warning")
-            self.audit.append_audit(
-                "Shadow Started",
-                f"Candidate MAE {cand_str} vs production MAE {curr_str} — {gate_reason}",
-                f"Running A/B test over {self.shadow_evaluator.window_size} live cycles",
-                "Warning",
-                "MODEL",
-            )
-        else:
-            # Gate rejected candidate immediately — rollback
+    def _apply_retrain_result(self, result):
+        cand = result.get("candidate_mae")
+        curr = result.get("current_mae")
+        cand_str = f"{cand:.2f}" if cand is not None else "N/A"
+        curr_str = f"{curr:.2f}" if curr is not None else "N/A"
+
+        with self.lock:
+            if (
+                result.get("accepted")
+                and result.get("new_model") is not None
+                and result.get("new_scaler") is not None
+                and not self.shadow_evaluator.is_evaluating
+            ):
+                self.shadow_evaluator.start_shadow_evaluation(
+                    result["new_model"], result["new_scaler"]
+                )
+                self.system_state = "Shadowing"
+                self.last_action = f"Shadow evaluation started - gate passed ({result['reason']})"
+                self.action_reasons["Shadow evaluation"] += 1
+                self.audit.append_timeline("Shadow A/B evaluation started", "Warning")
+                self.audit.append_audit(
+                    result["event"],
+                    f"Candidate MAE {cand_str} vs production MAE {curr_str} - {result['reason']}",
+                    f"Running A/B test over {self.shadow_evaluator.window_size} live cycles",
+                    result["status"],
+                    "MODEL",
+                )
+                return
+
             self.action_reasons["Quality gate"] += 1
             self.audit.append_audit(
-                "Retrain Rejected",
-                f"Performance gate: candidate {cand_str} vs production {curr_str} — {gate_reason}",
-                "Production model retained — no shadow evaluation",
-                "Warning",
+                result["event"],
+                f"Performance gate: candidate {cand_str} vs production {curr_str} - {result['reason']}",
+                result["action"],
+                result["status"],
                 "MODEL",
             )
-            self.audit.append_alert(
-                "Warning",
-                f"Retrain candidate rejected by gate: {gate_reason}",
-            )
-
-        return required, elapsed
+            if result["event"] in {"Retrain Failed", "Retrain Rejected"}:
+                self.audit.append_alert(
+                    "Warning", f"Retrain candidate rejected: {result['reason']}"
+                )
 
     # -----------------------------------------------------------------------
     # Per-sample processing loop
     # -----------------------------------------------------------------------
 
-    def _process_one(self):
+    def _create_stream_event(self):
         raw = self._next_row()
         data = self._apply_stream_noise(raw)
         scenario_active = self._apply_active_scenario(data)
+        return {"data": data, "scenario_active": scenario_active}
+
+    def _enqueue_stream_event(self):
+        if len(self.event_queue) >= STREAM_QUEUE_MAXLEN:
+            self.event_queue.popleft()
+            self.load_shedding_total += 1
+            self.load_shedding_events_since_snapshot += 1
+            self.last_load_shedding_at = time.monotonic()
+            self.action_reasons["Load Shedding (Stale Data)"] += 1
+            if (
+                self.load_shedding_total == 1
+                or self.load_shedding_total - self.last_load_shedding_audit_total >= 100
+            ):
+                self.last_load_shedding_audit_total = self.load_shedding_total
+                self.audit.append_audit(
+                    "Load Shedding Active",
+                    "Stream queue reached capacity; oldest queued packets were discarded",
+                    f"Discarded stale packets total: {self.load_shedding_total}",
+                    "Critical",
+                    "RATE_LIMIT",
+                )
+        self.event_queue.append(self._create_stream_event())
+        self.stream_backlog = len(self.event_queue)
+
+    def _warm_up_stream(self):
+        for _ in range(INITIAL_STREAM_WARMUP_SAMPLES):
+            self._enqueue_stream_event()
+        self.current_incoming_rate = self.stream_rate
+        self.current_processed_rate = min(self.stream_rate, self.applied_rate_limit)
+        started = time.perf_counter()
+        processed = 0
+        warmup_events = [
+            self.event_queue.popleft()
+            for _ in range(min(INITIAL_STREAM_WARMUP_SAMPLES, len(self.event_queue)))
+        ]
+        try:
+            predictions = self._predict_batch_with_confidence(warmup_events)
+        except Exception:
+            predictions = [None] * len(warmup_events)
+        anomaly_results = self._detect_anomalies_batch(warmup_events)
+        for event, prediction, anomaly_result in zip(warmup_events, predictions, anomaly_results):
+            self.stream_backlog = len(self.event_queue)
+            self._process_one(event, prediction, anomaly_result)
+            processed += 1
+        elapsed = time.perf_counter() - started
+        if processed > 0 and elapsed > 0:
+            measured_capacity = processed / elapsed
+            self.worker_capacity_limit = float(np.clip(measured_capacity * 0.92, 1.0, 40.0))
+
+    def _process_one(self, event, prediction=None, anomaly_result=None):
+        data = event["data"]
+        scenario_active = event["scenario_active"]
 
         self.buffer.append(data.copy())
         self.current_feature_window.append(
@@ -418,18 +736,20 @@ class StreamingMLRuntime:
         actual = float(data["RUL"])
 
         # --- Isolation Forest anomaly detection ---
-        try:
-            is_anomaly, anomaly_score = self.anomaly_detector.is_anomaly(data)
-        except Exception:
-            is_anomaly, anomaly_score = False, 0.0
+        if anomaly_result is not None:
+            is_anomaly, anomaly_score = anomaly_result
+        else:
+            try:
+                is_anomaly, anomaly_score = self.anomaly_detector.is_anomaly(data)
+            except Exception:
+                is_anomaly, anomaly_score = False, 0.0
 
         # --- RF prediction with confidence intervals ---
         try:
-            pred, pred_lower, pred_upper, pred_std = (
-                self.confidence_predictor.predict_with_confidence(
-                    self.model, self.scaler, data
-                )
-            )
+            if prediction is None:
+                prediction = self._predict_with_confidence_fast(data)
+            pred, pred_lower, pred_upper, pred_std = prediction
+            self.last_prediction_std = pred_std
         except Exception:
             pred = float(actual)
             pred_lower = pred - 10.0
@@ -445,9 +765,24 @@ class StreamingMLRuntime:
 
         # --- Shadow model A/B evaluation ---
         if self.shadow_evaluator.is_evaluating:
-            should_promote, prod_mae, shadow_mae = self.shadow_evaluator.evaluate_both(
-                self.model, self.scaler, data, actual
-            )
+            should_promote, prod_mae, shadow_mae = False, None, None
+            try:
+                shadow_pred = self._predict_model_fast(
+                    self.shadow_evaluator.shadow_model,
+                    self.shadow_evaluator.shadow_scaler,
+                    data,
+                )
+                self.shadow_evaluator.production_errors.append(error)
+                self.shadow_evaluator.shadow_errors.append(abs(actual - shadow_pred))
+                if len(self.shadow_evaluator.shadow_errors) >= self.shadow_evaluator.window_size:
+                    prod_mae = float(np.mean(self.shadow_evaluator.production_errors))
+                    shadow_mae = float(np.mean(self.shadow_evaluator.shadow_errors))
+                    should_promote = shadow_mae < (
+                        prod_mae * self.shadow_evaluator.improvement_threshold
+                    )
+            except Exception:
+                should_promote, prod_mae, shadow_mae = False, None, None
+
             if should_promote:
                 self.model = self.shadow_evaluator.shadow_model
                 self.scaler = self.shadow_evaluator.shadow_scaler
@@ -556,32 +891,39 @@ class StreamingMLRuntime:
                 "Drift" if event_type == "DRIFT" else "Confidence drop"
             ] += 1
 
-        # --- Rate control / Kafka lag simulation ---
-        effective_limit = self.rate_limit if self.rate_limit_enabled else self.stream_rate
-        if self.rate_limit_enabled and self.stream_rate > self.rate_limit:
-            self.kafka_lag += (self.stream_rate - self.rate_limit) * 0.8
-            self.action_reasons["Overload"] += 1
-        else:
-            self.kafka_lag = max(0.0, self.kafka_lag - max(1.0, effective_limit * 0.2))
-
         clock, _ = self._now_parts()
         latency = int(
-            np.clip(42 + self.stream_rate * 2 + drift_score * 80 + self.kafka_lag / 3, 35, 420)
+            np.clip(
+                12
+                + self.current_processed_rate * 1.5
+                + drift_score * 80
+                + self.stream_backlog / 2.8,
+                10,
+                420,
+            )
         )
 
         point = {
             "time": clock,
             "sampleIndex": self.sample_index,
-            "dataRate": round(self.stream_rate, 1),
+            "dataRate": round(self.current_incoming_rate, 1),
+            "incomingRate": round(self.current_incoming_rate, 1),
+            "processedRate": round(self.current_processed_rate, 1),
+            "appliedRateLimit": round(self.applied_rate_limit, 1),
+            "configuredRateLimit": round(self.rate_limit, 1),
+            "throttledRate": round(
+                max(0.0, self.current_incoming_rate - self.current_processed_rate), 1
+            ),
+            "rateControlState": self.rate_control_state,
             "latency": latency,
             "driftScore": round(drift_score, 3),
-            "confidence": round(confidence, 3),
+            "confidence": confidence,
             "confidenceCategory": confidence_category,
             "error": round(min(error / 125.0, 1.0), 3),
             "mae": round(error, 2),
             "rollingMae": None if rolling_avg is None else round(float(rolling_avg), 2),
             "accuracy": round(max(0.0, 1.0 - min(error / 125.0, 1.0)), 3),
-            "kafkaLag": int(self.kafka_lag),
+            "streamBacklog": int(self.stream_backlog),
             "prediction": round(pred, 2),
             "actual": round(actual, 2),
             "predLower": round(pred_lower, 2),
@@ -596,25 +938,256 @@ class StreamingMLRuntime:
             "cooldownElapsed": elapsed_cooldown,
             "cooldownRequired": required_cooldown,
         }
-        self.series.append(point)
+        self.latest_point = point
         self.sample_index += 1
 
     # -----------------------------------------------------------------------
-    # Time-driven advance (called on each dashboard poll)
+    # Background stream worker and dashboard snapshots
     # -----------------------------------------------------------------------
 
-    def advance(self):
-        now = time.monotonic()
-        elapsed = now - self.last_advance
-        due = int(elapsed * self.stream_rate)
-        if not self.series:
-            due = max(due, 24)
-        due = max(0, min(due, 35))
-        if due == 0:
+    def start(self):
+        if self.worker_thread and self.worker_thread.is_alive():
             return
-        for _ in range(due):
-            self._process_one()
+        self.stop_event.clear()
+        self.worker_thread = Thread(target=self._run_stream_loop, daemon=True)
+        self.worker_thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=3.0)
+
+    def _run_stream_loop(self):
+        self.last_advance = time.monotonic()
+        self.last_snapshot_at = self.last_advance
+
+        while not self.stop_event.is_set():
+            tick_started = time.monotonic()
+            with self.lock:
+                self._stream_tick(tick_started)
+
+            elapsed = time.monotonic() - tick_started
+            sleep_for = max(0.0, STREAM_TICK_SECONDS - elapsed)
+            self.stop_event.wait(sleep_for)
+
+    def _stream_tick(self, now):
+        elapsed = max(0.0, now - self.last_advance)
+        if elapsed <= 0:
+            return
+
+        incoming_float = elapsed * self.stream_rate + self.arrival_carry
+        incoming_events = int(incoming_float)
+        self.arrival_carry = incoming_float - incoming_events
+        for _ in range(incoming_events):
+            self._enqueue_stream_event()
+
+        applied_limit = self._update_rate_controller(elapsed)
+        self.processing_carry = min(
+            self.processing_carry + elapsed * applied_limit,
+            MAX_PROCESSING_BURST_EVENTS,
+        )
+        process_due = min(
+            int(self.processing_carry),
+            len(self.event_queue),
+            MAX_EVENTS_PER_WORKER_TICK,
+        )
+        self.processing_carry -= process_due
+
+        batch = [self.event_queue.popleft() for _ in range(process_due)]
+        try:
+            predictions = self._predict_batch_with_confidence(batch)
+        except Exception:
+            predictions = [None] * len(batch)
+        anomaly_results = self._detect_anomalies_batch(batch)
+
+        for event, prediction, anomaly_result in zip(batch, predictions, anomaly_results):
+            self.stream_backlog = len(self.event_queue)
+            self._process_one(event, prediction, anomaly_result)
+
+        self.incoming_events_since_snapshot += incoming_events
+        self.processed_events_since_snapshot += process_due
+        self.stream_backlog = len(self.event_queue)
         self.last_advance = now
+
+        if now - self.last_snapshot_at >= DASHBOARD_SNAPSHOT_SECONDS:
+            self._publish_dashboard_snapshot(now)
+
+    def _publish_dashboard_snapshot(self, now=None, update_rates=True):
+        now = time.monotonic() if now is None else now
+        if update_rates:
+            rate_window = max(now - self.last_snapshot_at, DASHBOARD_SNAPSHOT_SECONDS)
+            self.current_incoming_rate = self.incoming_events_since_snapshot / rate_window
+            self.current_processed_rate = self.processed_events_since_snapshot / rate_window
+
+            self.incoming_events_since_snapshot = 0
+            self.processed_events_since_snapshot = 0
+            self.last_snapshot_at = now
+
+        if update_rates and self.latest_point is not None:
+            point = {
+                **self.latest_point,
+                "time": self._now_parts()[0],
+                "dataRate": round(self.current_incoming_rate, 1),
+                "incomingRate": round(self.current_incoming_rate, 1),
+                "processedRate": round(self.current_processed_rate, 1),
+                "appliedRateLimit": round(self.applied_rate_limit, 1),
+                "configuredRateLimit": round(self.rate_limit, 1),
+                "throttledRate": round(
+                    max(0.0, self.current_incoming_rate - self.current_processed_rate), 1
+                ),
+                "rateControlState": self.rate_control_state,
+                "streamBacklog": int(self.stream_backlog),
+            }
+            self.latest_point = point
+            self.series.append(point)
+
+        snapshot = self._build_dashboard_response()
+        with self.snapshot_lock:
+            self.dashboard_snapshot = snapshot
+        if update_rates:
+            self.load_shedding_events_since_snapshot = 0
+
+    def _build_dashboard_response(self):
+        latest = self.latest_point or (self.series[-1] if self.series else {})
+        feature_scores = self._feature_scores()
+        series = list(self.series)
+        action_reasons = (
+            [
+                {"reason": r, "value": v}
+                for r, v in self.action_reasons.items()
+                if v > 0
+            ]
+            or [{"reason": "Monitoring", "value": 1}]
+        )
+
+        # Active scenario metadata for dashboard
+        sc_meta = (
+            SCENARIO_REGISTRY[self.active_scenario_id].META
+            if self.active_scenario_id
+            else None
+        )
+
+        return {
+            "overview": {
+                "systemStatus": latest.get("status", "Healthy"),
+                "activeModelVersion": f"v1.0.{self.model_version}",
+                "series": series,
+                "confidenceHistogram": self._histogram(),
+                "latestSample": {
+                    "prediction": latest.get("prediction", 0),
+                    "actual": latest.get("actual", 0),
+                    "interval": [
+                        latest.get("predLower", 0),
+                        latest.get("predUpper", 0),
+                    ],
+                    "action": latest.get("action", "STABLE"),
+                    "sampleIndex": latest.get("sampleIndex", 0),
+                    "confidenceCategory": latest.get(
+                        "confidenceCategory", "medium_confidence"
+                    ),
+                    "adwinDrift": latest.get("adwinDrift", False),
+                    "dataDrift": latest.get("dataDrift", False),
+                    "anomalyDetected": latest.get("anomalyDetected", False),
+                    "anomalyScore": latest.get("anomalyScore", 0.0),
+                },
+                "meta": {
+                    "live": not self.stop_event.is_set(),
+                    "snapshotIntervalMs": int(DASHBOARD_SNAPSHOT_SECONDS * 1000),
+                    "workerTickMs": int(STREAM_TICK_SECONDS * 1000),
+                    "lastUpdatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+                "scenario": {
+                    "active": self.active_scenario_remaining > 0,
+                    "remaining": self.active_scenario_remaining,
+                    "id": self.active_scenario_id,
+                    "name": sc_meta["name"] if sc_meta else None,
+                    "severity": sc_meta["severity"] if sc_meta else None,
+                },
+            },
+            "drift": {
+                "featureDistributionShift": self._distribution_shift(feature_scores),
+                "featureScores": feature_scores,
+                "conceptSeries": series,
+                "alerts": self.audit.get_alerts(),
+            },
+            "rateControl": {
+                "rateLimitEnabled": self.rate_limit_enabled,
+                "rateLimit": round(self.rate_limit, 1),
+                "simulatedRate": round(self.stream_rate, 1),
+                "incomingRate": round(self.current_incoming_rate, 1),
+                "currentRate": round(self.current_processed_rate, 1),
+                "processedRate": round(self.current_processed_rate, 1),
+                "appliedRateLimit": round(self.applied_rate_limit, 1),
+                "throttledRate": round(
+                    max(0.0, self.current_incoming_rate - self.current_processed_rate),
+                    1,
+                ),
+                "streamBacklog": int(self.stream_backlog),
+                "queueCapacity": STREAM_QUEUE_MAXLEN,
+                "loadSheddingActive": (
+                    self.load_shedding_events_since_snapshot > 0
+                    or (
+                        self.last_load_shedding_at is not None
+                        and time.monotonic() - self.last_load_shedding_at <= 4.0
+                    )
+                ),
+                "loadSheddingTotal": int(self.load_shedding_total),
+                "loadSheddingRecent": int(self.load_shedding_events_since_snapshot),
+                "workerCapacity": round(self.worker_capacity_limit, 1),
+                "controllerState": self.rate_control_state,
+                "controllerReason": self.rate_control_reason,
+                "overloadRisk": int(
+                    np.clip(
+                        max(self.stream_backlog / 90.0, latest.get("latency", 45) / 260.0)
+                        * 100,
+                        0,
+                        100,
+                    )
+                ),
+                "cpuUsage": int(
+                    np.clip(
+                        12 + self.current_processed_rate * 1.8 + latest.get("driftScore", 0.0) * 24,
+                        5,
+                        96,
+                    )
+                ),
+                "memoryUsage": int(
+                    np.clip(
+                        22 + self.stream_backlog / 5.0 + latest.get("driftScore", 0.0) * 18,
+                        15,
+                        92,
+                    )
+                ),
+                "actualVsLimitSeries": [
+                    {
+                        "time": p["time"],
+                        "sampleIndex": p.get("sampleIndex", 0),
+                        "incomingRate": p.get("incomingRate", p["dataRate"]),
+                        "actualRate": p.get("processedRate", p["dataRate"]),
+                        "appliedRateLimit": p.get("appliedRateLimit", round(self.applied_rate_limit, 1)),
+                        "rateLimit": p.get("configuredRateLimit", round(self.rate_limit, 1)),
+                    }
+                    for p in series
+                ],
+                "streamBacklogSeries": [
+                    {
+                        "time": p["time"],
+                        "sampleIndex": p.get("sampleIndex", 0),
+                        "streamBacklog": p["streamBacklog"],
+                    }
+                    for p in series
+                ],
+            },
+            "selfHealing": {
+                "timeline": self.audit.get_timeline(),
+                "modelHistory": self.audit.get_model_history(),
+                "actionReasons": action_reasons,
+                "lastActionTaken": self.last_action,
+                "currentSystemState": self.system_state,
+                "shadowEvaluation": self.shadow_evaluator.get_status(),
+            },
+            "auditLogs": self.audit.get_audit_logs(),
+        }
 
     # -----------------------------------------------------------------------
     # Public API methods
@@ -648,6 +1221,7 @@ class StreamingMLRuntime:
             return {"ok": True, "scenario": meta}
 
     def update_controls(self, request):
+        rate_control_patch = {}
         with self.lock:
             if request.simulatedRate is not None:
                 self.stream_rate = float(request.simulatedRate)
@@ -655,6 +1229,20 @@ class StreamingMLRuntime:
                 self.rate_limit = float(request.rateLimit)
             if request.rateLimitEnabled is not None:
                 self.rate_limit_enabled = bool(request.rateLimitEnabled)
+            if self.rate_limit_enabled:
+                self.applied_rate_limit = min(self.applied_rate_limit, self.rate_limit)
+            else:
+                self.applied_rate_limit = self.worker_capacity_limit
+                self.rate_control_state = "Bypassed"
+                self.rate_control_reason = "Rate limiting is disabled (ML worker capacity)"
+            rate_control_patch = {
+                "rateLimitEnabled": self.rate_limit_enabled,
+                "rateLimit": round(self.rate_limit, 1),
+                "simulatedRate": round(self.stream_rate, 1),
+                "appliedRateLimit": round(self.applied_rate_limit, 1),
+                "controllerState": self.rate_control_state,
+                "controllerReason": self.rate_control_reason,
+            }
             self.audit.append_audit(
                 "Rate Policy Updated",
                 "Operator changed streaming controls",
@@ -662,114 +1250,14 @@ class StreamingMLRuntime:
                 "Healthy",
                 "RATE_LIMIT",
             )
-            return {"ok": True}
+        with self.snapshot_lock:
+            if self.dashboard_snapshot is not None:
+                self.dashboard_snapshot["rateControl"].update(rate_control_patch)
+        return {"ok": True}
 
     def dashboard(self):
-        with self.lock:
-            self.advance()
-            latest = self.series[-1] if self.series else {}
-            feature_scores = self._feature_scores()
-            series = list(self.series)
-            action_reasons = (
-                [
-                    {"reason": r, "value": v}
-                    for r, v in self.action_reasons.items()
-                    if v > 0
-                ]
-                or [{"reason": "Monitoring", "value": 1}]
-            )
-
-            # Active scenario metadata for dashboard
-            sc_meta = (
-                SCENARIO_REGISTRY[self.active_scenario_id].META
-                if self.active_scenario_id
-                else None
-            )
-
-            return {
-                "overview": {
-                    "systemStatus": latest.get("status", "Healthy"),
-                    "activeModelVersion": f"v1.0.{self.model_version}",
-                    "series": series,
-                    "confidenceHistogram": self._histogram(),
-                    "latestSample": {
-                        "prediction": latest.get("prediction", 0),
-                        "actual": latest.get("actual", 0),
-                        "interval": [
-                            latest.get("predLower", 0),
-                            latest.get("predUpper", 0),
-                        ],
-                        "action": latest.get("action", "STABLE"),
-                        "sampleIndex": latest.get("sampleIndex", 0),
-                        "confidenceCategory": latest.get(
-                            "confidenceCategory", "medium_confidence"
-                        ),
-                        "adwinDrift": latest.get("adwinDrift", False),
-                        "dataDrift": latest.get("dataDrift", False),
-                        "anomalyDetected": latest.get("anomalyDetected", False),
-                        "anomalyScore": latest.get("anomalyScore", 0.0),
-                    },
-                    "scenario": {
-                        "active": self.active_scenario_remaining > 0,
-                        "remaining": self.active_scenario_remaining,
-                        "id": self.active_scenario_id,
-                        "name": sc_meta["name"] if sc_meta else None,
-                        "severity": sc_meta["severity"] if sc_meta else None,
-                    },
-                },
-                "drift": {
-                    "featureDistributionShift": self._distribution_shift(feature_scores),
-                    "featureScores": feature_scores,
-                    "conceptSeries": series,
-                    "alerts": self.audit.get_alerts(),
-                },
-                "rateControl": {
-                    "rateLimitEnabled": self.rate_limit_enabled,
-                    "rateLimit": round(self.rate_limit, 1),
-                    "simulatedRate": round(self.stream_rate, 1),
-                    "currentRate": round(
-                        min(
-                            self.stream_rate,
-                            self.rate_limit if self.rate_limit_enabled else self.stream_rate,
-                        ),
-                        1,
-                    ),
-                    "cpuUsage": int(
-                        np.clip(
-                            28 + self.stream_rate * 2.1 + latest.get("driftScore", 0) * 24,
-                            20,
-                            96,
-                        )
-                    ),
-                    "memoryUsage": int(
-                        np.clip(
-                            38 + len(self.buffer) / 6 + latest.get("driftScore", 0) * 18,
-                            30,
-                            92,
-                        )
-                    ),
-                    "actualVsLimitSeries": [
-                        {
-                            "time": p["time"],
-                            "actualRate": p["dataRate"],
-                            "rateLimit": round(self.rate_limit, 1),
-                        }
-                        for p in series
-                    ],
-                    "kafkaLagSeries": [
-                        {"time": p["time"], "kafkaLag": p["kafkaLag"]} for p in series
-                    ],
-                },
-                "selfHealing": {
-                    "timeline": self.audit.get_timeline(),
-                    "modelHistory": self.audit.get_model_history(),
-                    "actionReasons": action_reasons,
-                    "lastActionTaken": self.last_action,
-                    "currentSystemState": self.system_state,
-                    "shadowEvaluation": self.shadow_evaluator.get_status(),
-                },
-                "auditLogs": self.audit.get_audit_logs(),
-            }
+        with self.snapshot_lock:
+            return self.dashboard_snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -791,6 +1279,11 @@ app.add_middleware(
 @app.get("/api/health")
 def health():
     return {"status": "ok", "modelVersion": f"v1.0.{runtime.model_version}"}
+
+
+@app.on_event("shutdown")
+def shutdown_runtime():
+    runtime.stop()
 
 
 @app.get("/api/dashboard")
@@ -816,5 +1309,7 @@ def update_controls(request: ControlRequest):
 @app.post("/api/reset")
 def reset_runtime():
     global runtime
+    old_runtime = runtime
+    old_runtime.stop()
     runtime = StreamingMLRuntime()
     return {"ok": True}

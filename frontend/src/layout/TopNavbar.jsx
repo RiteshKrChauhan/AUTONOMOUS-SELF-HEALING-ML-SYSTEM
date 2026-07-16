@@ -7,7 +7,7 @@ export default function TopNavbar({
   connectionState,
   anomaly,
   isInjecting,
-  onInjectAnomalies,
+  onOpenScenarioModal,
 }) {
   const isLive = connectionState === "live";
   const connectionLabel =
@@ -15,7 +15,8 @@ export default function TopNavbar({
       ? "Live"
       : connectionState === "connecting"
         ? "Connecting"
-        : "Fallback";
+        : "Offline";
+  const modelLabel = modelVersion ?? "Waiting for live data";
 
   return (
     <header className="topbar panel-card">
@@ -29,7 +30,7 @@ export default function TopNavbar({
             <Activity size={14} />
             {connectionLabel}
           </span>
-          <span className="topbar-badge topbar-hide-mobile">Model {modelVersion}</span>
+          <span className="topbar-badge topbar-hide-mobile">Model {modelLabel}</span>
           {anomaly?.active && (
             <span className="topbar-badge badge-critical topbar-hide-mobile">
               Drift active: {anomaly.remaining} samples
@@ -37,13 +38,13 @@ export default function TopNavbar({
           )}
           <button
             type="button"
-            onClick={() => onInjectAnomalies()}
+            onClick={onOpenScenarioModal}
             className="primary-action-btn"
             disabled={isInjecting || !isLive}
-            title="Inject synthetic sensor anomalies"
+            title="Choose and inject an anomaly scenario"
           >
             {isInjecting ? <RotateCw size={15} /> : <Zap size={15} />}
-            {isInjecting ? "Injecting" : "Inject Anomalies"}
+            {isInjecting ? "Injecting" : "Inject Scenario"}
           </button>
           <button
             type="button"

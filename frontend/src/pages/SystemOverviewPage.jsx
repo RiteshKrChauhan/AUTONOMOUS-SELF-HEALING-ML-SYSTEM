@@ -1,45 +1,75 @@
-import { useState } from "react";
 import { useOutletContext } from "react-router-dom";
+import ConfidenceHistogramChart from "../charts/ConfidenceHistogramChart";
 import DataRateLatencyChart from "../charts/DataRateLatencyChart";
 import DriftScoreLineChart from "../charts/DriftScoreLineChart";
-import ConfidenceHistogramChart from "../charts/ConfidenceHistogramChart";
-import AnomalyModal from "../components/AnomalyModal";
 import MetricCard from "../components/MetricCard";
 import SectionCard from "../components/SectionCard";
 import StatusPill from "../components/StatusPill";
 
 export default function SystemOverviewPage() {
-  const { dashboardData, connectionState, isInjecting, onInjectAnomalies } = useOutletContext();
-  const [modalOpen, setModalOpen] = useState(false);
+  const { dashboardData, connectionState } = useOutletContext();
+
+  if (!dashboardData?.overview) {
+    return (
+      <div className="page-stack">
+        <SectionCard
+          title={connectionState === "offline" ? "Backend offline" : "Waiting for live data"}
+          subtitle="The dashboard renders only processed metrics from the backend."
+        >
+          <div className="inset-card">
+            <p className="inset-text">
+              {connectionState === "offline"
+                ? "The backend did not return a processed dashboard snapshot."
+                : "Live dashboard data is still loading."}
+            </p>
+          </div>
+        </SectionCard>
+      </div>
+    );
+  }
 
   const latest = dashboardData.overview.series.at(-1);
   const latestSample = dashboardData.overview.latestSample;
   const scenario = dashboardData.overview.scenario;
+  const meta = dashboardData.overview.meta;
 
-  const adwinLabel = latestSample.adwinDrift ? "🔴 Concept Drift" : "✅ Stable";
-  const ksLabel = latestSample.dataDrift ? "🔴 Feature Drift" : "✅ Stable";
-  const anomalyLabel = latestSample.anomalyDetected ? "⚠️ Anomaly" : "✅ Normal";
+  const adwinLabel = latestSample.adwinDrift ? "Concept drift" : "ADWIN stable";
+  const ksLabel = latestSample.dataDrift ? "Feature drift" : "KS stable";
+  const anomalyLabel = latestSample.anomalyDetected ? "Anomaly detected" : "Anomaly clear";
+  const lastUpdated = meta?.lastUpdatedAt?.split(" ").at(-1) ?? latest.time;
 
   return (
     <div className="page-stack">
-      {/* Anomaly Scenario Modal */}
-      <AnomalyModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        onInject={onInjectAnomalies}
-        isInjecting={isInjecting}
-      />
-
-      {/* Active scenario banner */}
       {scenario?.active && (
         <div className={`scenario-banner scenario-banner--${(scenario.severity ?? "medium").toLowerCase()}`}>
-          <span className="scenario-banner-icon">⚡</span>
+          <span className="scenario-banner-icon">!</span>
           <span>
-            <strong>{scenario.name}</strong> scenario active —{" "}
+            <strong>{scenario.name}</strong> scenario active -{" "}
             <span className="mono-text">{scenario.remaining} cycles remaining</span>
           </span>
         </div>
       )}
+
+      <div className="live-ops-strip panel-card">
+        <div>
+          <span className={`live-chart-badge ${connectionState === "live" ? "live-chart-badge-cyan" : "live-chart-badge-amber"}`}>
+            <span className="live-chart-dot" />
+            {connectionState === "live" ? "Streaming" : "Reconnecting"}
+          </span>
+        </div>
+        <div className="live-ops-item">
+          <span>Worker tick</span>
+          <strong>{meta?.workerTickMs ?? 50} ms</strong>
+        </div>
+        <div className="live-ops-item">
+          <span>Snapshot</span>
+          <strong>{meta?.snapshotIntervalMs ?? 500} ms</strong>
+        </div>
+        <div className="live-ops-item">
+          <span>Last update</span>
+          <strong>{lastUpdated}</strong>
+        </div>
+      </div>
 
       <div className="dashboard-grid dashboard-grid-3">
         <MetricCard label="System Status" value={dashboardData.overview.systemStatus} hint="Composite health signal" status={dashboardData.overview.systemStatus} />
@@ -47,11 +77,10 @@ export default function SystemOverviewPage() {
         <MetricCard label="Drift Score" value={latest.driftScore} hint="Combined KS + ADWIN drift score" />
         <MetricCard label="Active Model Version" value={dashboardData.overview.activeModelVersion} hint="Serving model in production" />
         <MetricCard label="Latency" value={`${latest.latency} ms`} hint="End-to-end processing latency" />
-        <MetricCard label="Kafka Lag" value={`${latest.kafkaLag}`} hint="Unprocessed backlog count" />
+        <MetricCard label="Stream Backlog" value={`${latest.streamBacklog}`} hint="Unprocessed backlog count" />
       </div>
 
       <div className="dashboard-grid dashboard-grid-3">
-        {/* Live prediction card */}
         <SectionCard title="Live Prediction" subtitle="Latest turbine RUL inference">
           <div className="live-sample-grid">
             <div>
@@ -68,7 +97,7 @@ export default function SystemOverviewPage() {
             </div>
           </div>
           <p className="sample-meta">
-            Sample #{latestSample.sampleIndex} | interval [{latestSample.interval[0]} – {latestSample.interval[1]}]
+            Sample #{latestSample.sampleIndex} | interval [{latestSample.interval[0]} - {latestSample.interval[1]}]
           </p>
           <div className="drift-indicators">
             <span className="drift-indicator-pill">{adwinLabel}</span>
@@ -77,31 +106,6 @@ export default function SystemOverviewPage() {
           </div>
         </SectionCard>
 
-        {/* Anomaly injection card */}
-        <SectionCard title="Anomaly Scenario Injection" subtitle="Simulate real-world fault conditions">
-          <div className="action-panel">
-            <div>
-              <p className="action-title">
-                {scenario?.active ? `Scenario active: ${scenario.name}` : "Baseline stream running"}
-              </p>
-              <p className="action-copy">
-                {scenario?.active
-                  ? `${scenario.remaining} cycles remaining — severity: ${scenario.severity}`
-                  : "Choose a scenario to stress-test the self-healing pipeline."}
-              </p>
-            </div>
-            <button
-              type="button"
-              className="primary-action-btn full-width"
-              onClick={() => setModalOpen(true)}
-              disabled={isInjecting || connectionState !== "live"}
-            >
-              {isInjecting ? "Injecting..." : "⚡ Choose & Inject Scenario"}
-            </button>
-          </div>
-        </SectionCard>
-
-        {/* Runtime state card */}
         <SectionCard title="Runtime State" subtitle="API and stream execution status">
           <div className="runtime-list">
             <div className="runtime-row">

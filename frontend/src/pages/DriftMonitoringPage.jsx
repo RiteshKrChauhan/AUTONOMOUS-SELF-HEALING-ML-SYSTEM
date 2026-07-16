@@ -9,6 +9,21 @@ import SectionCard from "../components/SectionCard";
 export default function DriftMonitoringPage() {
   const { dashboardData } = useOutletContext();
 
+  if (!dashboardData?.drift) {
+    return (
+      <div className="page-stack">
+        <SectionCard
+          title="Waiting for live data"
+          subtitle="The backend has not returned processed drift metrics yet."
+        >
+          <div className="inset-card">
+            <p className="inset-text">No processed drift snapshot is available.</p>
+          </div>
+        </SectionCard>
+      </div>
+    );
+  }
+
   return (
     <div className="page-stack">
       <div className="dashboard-grid dashboard-grid-2">

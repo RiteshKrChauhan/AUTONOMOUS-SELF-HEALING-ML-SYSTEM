@@ -1,22 +1,60 @@
+import { useMemo } from "react";
 import { useOutletContext } from "react-router-dom";
-import KafkaLagChart from "../charts/KafkaLagChart";
+import StreamBacklogChart from "../charts/StreamBacklogChart";
 import RateGaugeChart from "../charts/RateGaugeChart";
 import RateLimitChart from "../charts/RateLimitChart";
+import AuditLogTable from "../components/AuditLogTable";
 import MetricCard from "../components/MetricCard";
 import SectionCard from "../components/SectionCard";
 
 export default function RateControlPage() {
   const { dashboardData, controls, connectionState, onControlsChange } = useOutletContext();
   const controlsDisabled = connectionState !== "live";
+  const rateLimitLogs = useMemo(
+    () => (dashboardData?.auditLogs ?? []).filter((log) => log.eventType === "RATE_LIMIT"),
+    [dashboardData?.auditLogs]
+  );
+
+  if (!dashboardData?.rateControl || !controls) {
+    return (
+      <div className="page-stack">
+        <SectionCard
+          title={connectionState === "offline" ? "Backend offline" : "Waiting for live data"}
+          subtitle="Rate control only appears once the backend publishes processed metrics."
+        >
+          <div className="inset-card">
+            <p className="inset-text">
+              {connectionState === "offline"
+                ? "No processed rate-control snapshot is available."
+                : "Live rate-control data is still loading."}
+            </p>
+          </div>
+        </SectionCard>
+      </div>
+    );
+  }
+
+  const rateControl = dashboardData.rateControl;
+  const activeProcessingLimit = rateControl.appliedRateLimit ?? rateControl.workerCapacity ?? controls.rateLimit;
+  const gaugeMax = Math.max(activeProcessingLimit, rateControl.currentRate ?? 0, 1);
+  const backlogCapacity = rateControl.queueCapacity ?? 500;
+  const loadSheddingActive =
+    rateControl.loadSheddingActive ||
+    rateControl.loadSheddingRecent > 0 ||
+    rateControl.streamBacklog >= backlogCapacity;
 
   return (
     <div className="page-stack">
       <div className="dashboard-grid dashboard-grid-3">
         <SectionCard
-          title="Current Ingestion Rate"
-          subtitle="Gauge view of stream pressure"
+          title="Processed Ingestion Rate"
+          subtitle="Events admitted into the ML pipeline"
         >
-          <RateGaugeChart value={dashboardData.rateControl.currentRate} />
+          <RateGaugeChart
+            value={rateControl.currentRate}
+            max={gaugeMax}
+            capacityLabel="active limit"
+          />
         </SectionCard>
 
         <SectionCard
@@ -26,7 +64,7 @@ export default function RateControlPage() {
           <div className="control-stack">
             <div>
               <div className="control-row">
-                <span>Simulated data rate</span>
+                <span>Current incoming rate</span>
                 <span className="mono-text accent-cyan">{controls.simulatedRate} eps</span>
               </div>
               <input
@@ -64,7 +102,7 @@ export default function RateControlPage() {
 
             <div>
               <div className="control-row">
-                <span>Rate limit</span>
+                <span>Operator rate limit</span>
                 <span className="mono-text accent-amber">{controls.rateLimit} eps</span>
               </div>
               <input
@@ -85,36 +123,80 @@ export default function RateControlPage() {
 
         <div className="dashboard-grid dashboard-grid-single-gap">
           <MetricCard
-            label="CPU Usage"
-            value={`${dashboardData.rateControl.cpuUsage}%`}
-            hint="Streaming workers"
+            label="Applied Limit"
+            value={`${rateControl.appliedRateLimit} eps`}
+            hint={rateControl.controllerState}
           />
           <MetricCard
-            label="Memory Usage"
-            value={`${dashboardData.rateControl.memoryUsage}%`}
-            hint="Inference and buffering"
+            label="Deferred Backlog"
+            value={`${rateControl.streamBacklog}/${backlogCapacity}`}
+            hint={
+              loadSheddingActive
+                ? `Load shedding active: ${rateControl.loadSheddingTotal ?? 0} stale packets discarded`
+                : `${rateControl.throttledRate} eps held back`
+            }
+            status={loadSheddingActive ? "Critical" : undefined}
           />
         </div>
       </div>
 
+      <div className="dashboard-grid dashboard-grid-3">
+        <MetricCard
+          label="Incoming Rate"
+          value={`${rateControl.incomingRate} eps`}
+          hint="Traffic offered to ingestion"
+        />
+        <MetricCard
+          label="Processed Rate"
+          value={`${rateControl.processedRate} eps`}
+          hint="Traffic consumed by ML workers"
+        />
+        <MetricCard
+          label="Overload Risk"
+          value={`${rateControl.overloadRisk}%`}
+          hint={rateControl.controllerReason}
+        />
+      </div>
+
       <div className="dashboard-grid dashboard-grid-2">
         <SectionCard
-          title="Actual Rate vs Rate Limit"
-          subtitle="Ingestion control policy behavior"
+          title="Incoming vs Applied Rate"
+          subtitle="Adaptive controller behavior"
         >
           <RateLimitChart
-            data={dashboardData.rateControl.actualVsLimitSeries}
-            enabled={dashboardData.rateControl.rateLimitEnabled}
+            data={rateControl.actualVsLimitSeries}
+            enabled={rateControl.rateLimitEnabled}
           />
         </SectionCard>
 
         <SectionCard
-          title="Kafka Consumer Lag"
-          subtitle="Backlog trend for streaming workers"
+          title="Stream Backlog"
+          subtitle="Deferred events waiting for safe processing"
         >
-          <KafkaLagChart data={dashboardData.rateControl.kafkaLagSeries} />
+          <StreamBacklogChart data={rateControl.streamBacklogSeries} />
         </SectionCard>
       </div>
+
+      <div className="dashboard-grid dashboard-grid-2">
+        <MetricCard
+          label="CPU Usage"
+          value={`${rateControl.cpuUsage}%`}
+          hint="Streaming workers"
+        />
+        <MetricCard
+          label="Memory Usage"
+          value={`${rateControl.memoryUsage}%`}
+          hint="Inference and buffering"
+        />
+      </div>
+
+      <SectionCard
+        title="Rate Limit Logs"
+        subtitle="Rate-control policy updates, throttling, and shedding events"
+        className="governance-log-card"
+      >
+        <AuditLogTable logs={rateLimitLogs} />
+      </SectionCard>
     </div>
   );
 }

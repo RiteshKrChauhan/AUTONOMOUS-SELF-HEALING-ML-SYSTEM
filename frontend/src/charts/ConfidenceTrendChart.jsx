@@ -20,7 +20,7 @@ export default function ConfidenceTrendChart({ data }) {
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(100,116,139,0.35)" />
         <XAxis dataKey="time" tick={{ fill: "#94a3b8", fontSize: 11 }} />
-        <YAxis domain={[0, 1]} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+        <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} />
         <Tooltip />
         <Area type="monotone" dataKey="confidence" stroke="#38bdf8" fill="url(#confidenceFill)" strokeWidth={2.3} />
       </AreaChart>

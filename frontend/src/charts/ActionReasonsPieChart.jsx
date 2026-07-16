@@ -1,6 +1,26 @@
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 
-const COLORS = ["#22d3ee", "#f59e0b", "#fb7185"];
+const COLORS = ["#22d3ee", "#f59e0b", "#fb7185", "#a78bfa", "#34d399", "#f97316"];
+
+function ActionReasonsTooltip({ active, data }) {
+  if (!active || !data?.length) return null;
+
+  return (
+    <div className="chart-tooltip action-reasons-tooltip">
+      <p className="chart-tooltip-title">Action events</p>
+      {data.map((entry, index) => (
+        <div className="chart-tooltip-row" key={entry.reason}>
+          <span
+            className="chart-tooltip-swatch"
+            style={{ backgroundColor: COLORS[index % COLORS.length] }}
+          />
+          <span>{entry.reason}</span>
+          <strong>{entry.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function ActionReasonsPieChart({ data }) {
   return (
@@ -20,7 +40,9 @@ export default function ActionReasonsPieChart({ data }) {
             <Cell key={entry.reason} fill={COLORS[idx % COLORS.length]} />
           ))}
         </Pie>
-        <Tooltip />
+        <Tooltip
+          content={({ active }) => <ActionReasonsTooltip active={active} data={data} />}
+        />
       </PieChart>
     </ResponsiveContainer>
   );

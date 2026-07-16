@@ -9,7 +9,7 @@ export default function AppLayout({
   connectionState,
   anomaly,
   isInjecting,
-  onInjectAnomalies,
+  onOpenScenarioModal,
   outletContext,
 }) {
   return (
@@ -24,7 +24,7 @@ export default function AppLayout({
             connectionState={connectionState}
             anomaly={anomaly}
             isInjecting={isInjecting}
-            onInjectAnomalies={onInjectAnomalies}
+            onOpenScenarioModal={onOpenScenarioModal}
           />
           <Outlet context={outletContext} />
         </main>
