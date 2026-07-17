@@ -97,7 +97,7 @@ export default function SystemOverviewPage() {
             </div>
           </div>
           <p className="sample-meta">
-            Sample #{latestSample.sampleIndex} | interval [{latestSample.interval[0]} - {latestSample.interval[1]}]
+            Sample #{latestSample.sampleIndex} | interval [{latestSample.interval[0]} - {latestSample.interval[1]}] | MAE: {latest.rollingMae !== null ? latest.rollingMae : "N/A"}
           </p>
           <div className="drift-indicators">
             <span className="drift-indicator-pill">{adwinLabel}</span>
