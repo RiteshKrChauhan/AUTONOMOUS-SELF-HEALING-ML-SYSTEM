@@ -10,27 +10,21 @@ import {
   YAxis,
 } from "recharts";
 import LiveChartFrame from "./LiveChartFrame";
-import { chartAnimation, getLastPoint, getSampleDomain, makeTimeFormatter } from "./chartUtils";
+import { chartAnimation, getLastPoint, useFixedXAxisProps } from "./chartUtils";
 
 export default function DataRateLatencyChart({ data }) {
   const last = getLastPoint(data);
-  const timeFormatter = makeTimeFormatter(data);
+  const xAxisProps = useFixedXAxisProps(data);
 
   return (
     <LiveChartFrame points={data?.length ?? 0}>
       <ResponsiveContainer width="100%" height={280}>
         <LineChart data={data} margin={{ left: 8, right: 8, top: 8, bottom: 8 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(100,116,139,0.35)" />
-          <XAxis
-            dataKey="sampleIndex"
-            type="number"
-            domain={getSampleDomain(data)}
-            tickFormatter={timeFormatter}
-            tick={{ fill: "#94a3b8", fontSize: 11 }}
-          />
-          <YAxis yAxisId="left" tick={{ fill: "#94a3b8", fontSize: 11 }} />
-          <YAxis yAxisId="right" orientation="right" tick={{ fill: "#94a3b8", fontSize: 11 }} />
-          <Tooltip labelFormatter={(value) => `Sample ${value} - ${timeFormatter(value)}`} />
+          <XAxis {...xAxisProps} />
+          <YAxis yAxisId="left" domain={[0, 60]} width={45} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+          <YAxis yAxisId="right" orientation="right" domain={[0, 200]} width={45} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+          <Tooltip labelFormatter={(value) => `${xAxisProps.tickFormatter?.(value) ?? ""}`} />
           <Legend />
           <Line yAxisId="left" type="monotone" dataKey="dataRate" name="Data rate (eps)" stroke="#22d3ee" strokeWidth={2.6} dot={false} connectNulls {...chartAnimation} />
           <Line yAxisId="right" type="monotone" dataKey="latency" name="Latency (ms)" stroke="#f59e0b" strokeWidth={2.4} dot={false} connectNulls {...chartAnimation} />
