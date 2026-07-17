@@ -432,41 +432,64 @@ class StreamingMLRuntime:
             return self.applied_rate_limit
 
         latest = self.series[-1] if self.series else {}
-        latest_latency = float(latest.get("latency", 45))
         latest_drift = float(latest.get("driftScore", 0.0))
-        
-        # Pressure is based ONLY on true ML computational strain (drift retraining), not queue size
-        drift_pressure = min(latest_drift, 1.0) * 0.45
-        pressure = drift_pressure
-        pressure = float(np.clip(pressure, 0.0, 1.0))
 
-        ceiling = max(1.0, self.rate_limit)
-        if pressure >= 0.78:
-            target = max(1.0, ceiling * 0.45)
+        # --- Rule 1: Hardware ceiling always applies ---
+        # The true ceiling is the LOWER of the operator-configured limit and the
+        # measured hardware capacity. Even if the operator sets 80 eps, the system
+        # will never attempt to process more than the machine can handle.
+        ceiling = float(np.clip(
+            min(self.rate_limit, self.worker_capacity_limit),
+            1.0,
+            self.worker_capacity_limit,
+        ))
+
+        # --- Rule 2: Protect when drift is detected or retraining is active ---
+        # Drift >= 0.65 is a strong signal that a retrain is imminent (actual retrain
+        # fires at drift > 0.68). Throttle early to free CPU headroom *before* the
+        # background thread spawns. Also throttle while retrain / shadow eval runs.
+        is_retraining = self.retrain_job_active or self.shadow_evaluator.is_evaluating
+        drift_triggered = latest_drift >= 0.65
+
+        if is_retraining or drift_triggered:
+            # Drop to 60% of ceiling so the retrain thread gets the CPU it needs.
+            # Events accumulate in the backlog during this window — that is expected.
+            target = max(1.0, ceiling * 0.60)
             state = "Protecting"
-            reason = "High backlog or latency pressure reduced the applied limit"
-        elif pressure >= 0.45:
-            target = max(1.0, ceiling * (1.0 - pressure * 0.45))
-            state = "Throttling"
-            reason = "Traffic pressure is above the adaptive threshold"
-        elif self.stream_backlog > 0 and self.stream_rate < ceiling:
-            drain_headroom = min(ceiling - self.stream_rate, max(0.0, self.stream_backlog * 0.15))
-            target = self.stream_rate + drain_headroom
+            if is_retraining:
+                reason = "ML model is retraining — rate reduced to free CPU headroom"
+            else:
+                reason = f"Drift detected ({latest_drift:.2f}) — pre-emptively throttling before retrain"
+
+        # --- Rule 3: Drain backlog at full ceiling when system is healthy ---
+        # Only enter Draining if backlog is meaningfully large (> 5 events).
+        # This filters out the micro-fluctuations from the sawtooth pattern where
+        # stream_backlog briefly reads > 0 mid-tick before processing runs.
+        elif self.stream_backlog > 5:
+            target = ceiling
             state = "Draining"
-            reason = "Processing below the ceiling to clear queued events"
+            reason = "Clearing backlog — processing at full operator limit"
+
+        # --- Rule 4: Nominal — no backlog, no retrain ---
         else:
             target = ceiling
             state = "Nominal"
             reason = "Incoming traffic is within the configured limit"
 
+        # Smooth transition toward target (faster drop, slower ramp-up)
         step_ratio = 0.45 if target < self.applied_rate_limit else 0.25
         max_step = max(0.5, ceiling * step_ratio * max(elapsed, 0.25))
         delta = float(np.clip(target - self.applied_rate_limit, -max_step, max_step))
         self.applied_rate_limit = float(np.clip(self.applied_rate_limit + delta, 1.0, ceiling))
 
         if self.stream_rate > self.applied_rate_limit:
-            state = "Throttling" if state == "Nominal" else state
-            reason = "Incoming rate is above the applied adaptive limit"
+            if state in {"Nominal", "Draining"}:
+                # Draining = catching up on a shrinking backlog
+                # Throttling = backlog is actively growing because incoming > limit
+                state = "Throttling"
+                reason = "Incoming rate exceeds applied limit — backlog building"
+            elif state == "Nominal":
+                reason = "Incoming rate is above the applied adaptive limit"
 
         previous_state = self.rate_control_state
         self.rate_control_state = state
@@ -935,7 +958,7 @@ class StreamingMLRuntime:
             "anomalyDetected": bool(is_anomaly),
             "anomalyScore": round(float(anomaly_score), 3),
             "scenarioActive": scenario_active,
-            "cooldownElapsed": elapsed_cooldown,
+            "cooldownElapsed": min(elapsed_cooldown, required_cooldown),
             "cooldownRequired": required_cooldown,
         }
         self.latest_point = point
