@@ -8,7 +8,7 @@ import MetricCard from "../components/MetricCard";
 import SectionCard from "../components/SectionCard";
 
 export default function RateControlPage() {
-  const { dashboardData, controls, connectionState, onControlsChange } = useOutletContext();
+  const { dashboardData, controls, connectionState, onControlsChange, onControlsCommit } = useOutletContext();
   const controlsDisabled = connectionState !== "live";
   const rateLimitLogs = useMemo(
     () => (dashboardData?.auditLogs ?? []).filter((log) => log.eventType === "RATE_LIMIT"),
@@ -77,6 +77,8 @@ export default function RateControlPage() {
                 onChange={(event) =>
                   onControlsChange({ simulatedRate: Number(event.target.value) })
                 }
+                onPointerUp={onControlsCommit}
+                onMouseUp={onControlsCommit}
                 className="range-input"
               />
             </div>
@@ -87,9 +89,10 @@ export default function RateControlPage() {
                 <button
                   type="button"
                   disabled={controlsDisabled}
-                  onClick={() =>
-                    onControlsChange({ rateLimitEnabled: !controls.rateLimitEnabled })
-                  }
+                  onClick={() => {
+                    onControlsChange({ rateLimitEnabled: !controls.rateLimitEnabled });
+                    onControlsCommit();
+                  }}
                   className={`toggle-pill ${controls.rateLimitEnabled ? "is-on" : "is-off"}`}
                   title="Toggle rate limiting"
                 >
@@ -115,6 +118,8 @@ export default function RateControlPage() {
                 onChange={(event) =>
                   onControlsChange({ rateLimit: Number(event.target.value) })
                 }
+                onPointerUp={onControlsCommit}
+                onMouseUp={onControlsCommit}
                 className="range-input"
               />
             </div>

@@ -98,9 +98,24 @@ export default function App() {
     }
   }
 
-  async function handleControlsChange(nextControls) {
+  // pendingControls holds slider values that the user is mid-drag.
+  // We update local state immediately (for responsive UI) but only POST
+  // to the backend when the user releases the slider (onPointerUp).
+  const pendingControlsRef = useRef(null);
+
+  function handleControlsChange(nextControls) {
+    // Optimistically update local state so the slider label moves in real-time.
+    setControls((prev) => ({ ...prev, ...nextControls }));
+    // Record the latest intended value — will be flushed on pointer release.
+    pendingControlsRef.current = { ...(pendingControlsRef.current ?? {}), ...nextControls };
+  }
+
+  async function handleControlsCommit() {
+    const pending = pendingControlsRef.current;
+    if (!pending) return;
+    pendingControlsRef.current = null;
     try {
-      await updateControls(nextControls);
+      await updateControls(pending);
       await refreshDashboard({ queueAfterCurrent: true });
     } catch (error) {
       setConnectionState("offline");
@@ -121,6 +136,7 @@ export default function App() {
       isInjecting,
       onInjectAnomalies: handleInjectAnomalies,
       onControlsChange: handleControlsChange,
+      onControlsCommit: handleControlsCommit,
       onResetRuntime: handleResetRuntime,
     }),
     [dashboardData, controls, connectionState, isInjecting]
