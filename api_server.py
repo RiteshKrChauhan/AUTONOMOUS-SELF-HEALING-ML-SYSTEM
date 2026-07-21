@@ -360,7 +360,7 @@ class StreamingMLRuntime:
     # -----------------------------------------------------------------------
 
     def _confidence_value(self, std, error):
-        return float(1.0 - (std / 95.0) - (error / 320.0))
+        return float(np.clip(1.0 - (std / 95.0) - (error / 320.0), 0.0, 1.0))
 
     def _status_from_metrics(self, drift_score, rolling_avg, action):
         if action in {"RETRAIN_URGENT", "ALERT"} or drift_score >= 0.82:
@@ -828,6 +828,14 @@ class StreamingMLRuntime:
                     "Healthy",
                     "MODEL",
                 )
+                # Refit anomaly detector on current buffer so it stays aligned
+                # with the new data distribution (issue #4 fix)
+                try:
+                    if len(self.buffer) >= 30:
+                        buffer_df = pd.DataFrame(list(self.buffer))
+                        self.anomaly_detector.fit(buffer_df)
+                except Exception:
+                    pass  # Never crash model promotion due to anomaly detector refit
             elif prod_mae is not None:
                 # Window complete but shadow wasn't better → implicit rollback
                 self.shadow_evaluator.stop_evaluation()
