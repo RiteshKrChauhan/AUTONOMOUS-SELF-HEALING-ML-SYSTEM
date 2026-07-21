@@ -7,6 +7,15 @@ import AuditLogTable from "../components/AuditLogTable";
 import SectionCard from "../components/SectionCard";
 import StatusPill from "../components/StatusPill";
 
+const EVENT_TYPE_LABELS = {
+  ALL: "All events",
+  DRIFT: "Drift",
+  RATE_LIMIT: "Rate control",
+  MODEL: "Model",
+  OVERLOAD: "Overload",
+  CONFIDENCE: "Confidence",
+};
+
 function parseTimestamp(logTimestamp) {
   return new Date(logTimestamp.replace(" ", "T"));
 }
@@ -18,8 +27,8 @@ function ShadowEvaluationCard({ shadow }) {
     ? Math.min(100, Math.round((shadow.samples_collected / shadow.samples_needed) * 100))
     : 0;
 
-  const prodMae = shadow.production_mae != null ? shadow.production_mae.toFixed(2) : "—";
-  const shadowMae = shadow.shadow_mae != null ? shadow.shadow_mae.toFixed(2) : "—";
+  const prodMae = shadow.production_mae != null ? shadow.production_mae.toFixed(2) : "N/A";
+  const shadowMae = shadow.shadow_mae != null ? shadow.shadow_mae.toFixed(2) : "N/A";
 
   const isBetter = shadow.shadow_mae != null && shadow.production_mae != null
     && shadow.shadow_mae < shadow.production_mae;
@@ -27,7 +36,7 @@ function ShadowEvaluationCard({ shadow }) {
   return (
     <div className="shadow-eval-card">
       <div className="shadow-eval-header">
-        <span className="shadow-eval-title">⚗️ Shadow A/B Evaluation in Progress</span>
+        <span className="shadow-eval-title">Shadow Model Evaluation in Progress</span>
         <span className="shadow-eval-cycles">
           {shadow.samples_collected} / {shadow.samples_needed} cycles
         </span>
@@ -45,7 +54,9 @@ function ShadowEvaluationCard({ shadow }) {
             <span className="mini-label">Shadow MAE</span>
             <span className={`shadow-mae-value ${isBetter ? "shadow-mae-better" : "shadow-mae-worse"}`}>
               {shadowMae}
-              {isBetter ? " ✓" : " ✗"}
+              {shadow.shadow_mae != null && shadow.production_mae != null
+                ? (isBetter ? " better" : " worse")
+                : ""}
             </span>
           </div>
           <div className="shadow-mae-item">
@@ -53,7 +64,7 @@ function ShadowEvaluationCard({ shadow }) {
             <span className="mono-text" style={{ fontSize: "0.78rem" }}>
               {shadow.ready_to_decide
                 ? (isBetter ? "Ready to promote" : "Will be rejected")
-                : "Evaluating…"}
+                : "Evaluating..."}
             </span>
           </div>
         </div>
@@ -89,8 +100,8 @@ export default function SelfHealingGovernancePage() {
     return (
       <div className="page-stack">
         <SectionCard
-          title={connectionState === "offline" ? "Backend offline" : "Waiting for live data"}
-          subtitle="Governance logs and model history depend on processed backend snapshots."
+          title={connectionState === "offline" ? "Backend unavailable" : "Waiting for governance data"}
+          subtitle="Model governance appears after the backend publishes processed snapshots."
         >
           <div className="inset-card">
             <p className="inset-text">
@@ -106,27 +117,26 @@ export default function SelfHealingGovernancePage() {
 
   return (
     <div className="page-stack">
-      {/* Shadow evaluation live card (only visible during shadow eval) */}
       {shadow?.is_evaluating && (
         <ShadowEvaluationCard shadow={shadow} />
       )}
 
-      <SectionCard title="Model Version History" subtitle="Deployment progression over time">
+      <SectionCard title="Model Deployment History" subtitle="Production model versions over time">
         <ModelVersionChart data={dashboardData.selfHealing.modelHistory} />
       </SectionCard>
 
       <div className="dashboard-grid dashboard-grid-3">
-        <SectionCard title="Action Reasons" subtitle="Why autonomous actions were triggered">
+        <SectionCard title="Autonomous Action Reasons" subtitle="Operational conditions that triggered system actions">
           <ActionReasonsPieChart data={dashboardData.selfHealing.actionReasons} />
         </SectionCard>
 
-        <SectionCard title="Last Action Taken" subtitle="Most recent governance outcome">
+        <SectionCard title="Most Recent Action" subtitle="Latest model governance outcome">
           <div className="inset-card">
             <p className="inset-text">{dashboardData.selfHealing.lastActionTaken}</p>
           </div>
         </SectionCard>
 
-        <SectionCard title="Current System State" subtitle="Runtime governance posture">
+        <SectionCard title="Governance State" subtitle="Current model management posture">
           <div className="inset-card">
             <StatusPill value={dashboardData.selfHealing.currentSystemState} />
             {shadow?.is_evaluating && (
@@ -139,8 +149,8 @@ export default function SelfHealingGovernancePage() {
       </div>
 
       <SectionCard
-        title="Governance Logs"
-        subtitle="Unified audit trail for self-healing decisions and operational actions"
+        title="Model Governance Audit Logs"
+        subtitle="Unified audit trail for model decisions and operational controls"
         className="governance-log-card"
         action={
           <div className="filter-group">
@@ -148,7 +158,7 @@ export default function SelfHealingGovernancePage() {
               type="button"
               className="secondary-action-btn"
               onClick={onResetRuntime}
-              title="Restart the demo runtime"
+              title="Restart the streaming runtime"
             >
               <RotateCcw size={14} />
               Reset Runtime
@@ -158,9 +168,9 @@ export default function SelfHealingGovernancePage() {
               onChange={(e) => setEventFilter(e.target.value)}
               className="filter-select"
             >
-              <option value="ALL">All events</option>
+              <option value="ALL">{EVENT_TYPE_LABELS.ALL}</option>
               {eventTypes.map((type) => (
-                <option key={type} value={type}>{type}</option>
+                <option key={type} value={type}>{EVENT_TYPE_LABELS[type] || type}</option>
               ))}
             </select>
             <select

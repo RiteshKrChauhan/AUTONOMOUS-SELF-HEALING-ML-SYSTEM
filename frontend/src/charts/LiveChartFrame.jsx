@@ -6,7 +6,7 @@ export default function LiveChartFrame({ children, points = 0, tone = "cyan" }) 
           <span className="live-chart-dot" />
           Live
         </span>
-        <span className="live-chart-points">{points} pts</span>
+        <span className="live-chart-points">{points} points</span>
       </div>
       {children}
     </div>

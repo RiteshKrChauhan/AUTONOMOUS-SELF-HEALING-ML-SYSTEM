@@ -16,7 +16,7 @@ export default function ModelVersionChart({ data }) {
         <XAxis dataKey="time" tick={{ fill: "#94a3b8", fontSize: 11 }} />
         <YAxis allowDecimals={false} tick={{ fill: "#94a3b8", fontSize: 11 }} />
         <Tooltip formatter={(value, name, item) => [item.payload.modelVersion, "Model version"]} />
-        <Line type="stepAfter" dataKey="versionIndex" stroke="#06b6d4" strokeWidth={2.8} dot={{ r: 4 }} />
+        <Line type="stepAfter" dataKey="versionIndex" name="Model version" stroke="#06b6d4" strokeWidth={2.8} dot={{ r: 4 }} />
       </LineChart>
     </ResponsiveContainer>
   );

@@ -1,33 +1,27 @@
 """
 Correlated Multi-Sensor Drift scenario.
-Six temperature-related sensors drift together by +3σ, simulating a thermal event
-like overheating or a cooling system failure where multiple correlated channels
-shift simultaneously.
-
-This tests the KS feature drift ratio threshold — when multiple features drift
-together, the ratio of drifted features exceeds the threshold faster than
-isolated single-sensor drift.
+Six temperature-related sensors drift together by +3σ, simulating a
+thermal event such as overheating or cooling system failure.
 """
 
-# These sensors are temperature and pressure related in CMAPSS FD001
 _CORRELATED_SENSORS = [
-    "sensor_2",   # Total temperature at fan inlet (°R)
-    "sensor_3",   # Total temperature at LPC outlet (°R)
-    "sensor_4",   # Total temperature at HPC outlet (°R)
-    "sensor_11",  # Static pressure at HPC outlet (psia)
-    "sensor_12",  # Ratio of fuel flow to Ps30
-    "sensor_13",  # Corrected core speed (rpm)
+    "sensor_2",
+    "sensor_3",
+    "sensor_4",
+    "sensor_11",
+    "sensor_12",
+    "sensor_13",
 ]
 
 
 class CorrelatedDrift:
     META = {
         "id": "correlated_drift",
-        "name": "Correlated Multi-Sensor Drift",
+        "name": "Correlated Sensor Drift",
         "severity": "High",
         "duration": 60,
-        "description": "6 temperature/pressure sensors drift +3σ together, simulating a thermal event.",
-        "expectedBehavior": "Feature drift ratio fires quickly. Multiple sensors highlighted in drift report. Retrain triggered.",
+        "description": "Six temperature and pressure sensors drift by +3σ together, simulating a thermal event.",
+        "expectedBehavior": "The feature drift ratio should rise quickly, multiple sensors should be highlighted, and retraining should be triggered.",
         "tags": ["data-drift", "correlated", "feature-drift"],
     }
 

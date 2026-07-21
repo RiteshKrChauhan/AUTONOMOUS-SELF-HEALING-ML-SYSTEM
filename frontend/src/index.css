@@ -879,6 +879,12 @@ html.dark .metric-card.status-card .metric-status {
   border-bottom: 0;
 }
 
+.audit-table .table-empty-state {
+  color: var(--muted);
+  text-align: center;
+  padding: 1.4rem 0.75rem;
+}
+
 .audit-event {
   font-weight: 600;
 }

@@ -26,7 +26,7 @@ export default function DataRateLatencyChart({ data }) {
           <YAxis yAxisId="right" orientation="right" domain={[0, 200]} width={45} tick={{ fill: "#94a3b8", fontSize: 11 }} />
           <Tooltip labelFormatter={(value) => `${xAxisProps.tickFormatter?.(value) ?? ""}`} />
           <Legend />
-          <Line yAxisId="left" type="monotone" dataKey="dataRate" name="Data rate (eps)" stroke="#22d3ee" strokeWidth={2.6} dot={false} connectNulls {...chartAnimation} />
+          <Line yAxisId="left" type="monotone" dataKey="dataRate" name="Ingestion rate (eps)" stroke="#22d3ee" strokeWidth={2.6} dot={false} connectNulls {...chartAnimation} />
           <Line yAxisId="right" type="monotone" dataKey="latency" name="Latency (ms)" stroke="#f59e0b" strokeWidth={2.4} dot={false} connectNulls {...chartAnimation} />
           {last ? <ReferenceDot yAxisId="left" x={last.sampleIndex} y={last.dataRate} r={4} fill="#22d3ee" stroke="#0f172a" /> : null}
         </LineChart>

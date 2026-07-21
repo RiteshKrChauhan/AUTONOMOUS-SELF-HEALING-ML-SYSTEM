@@ -19,14 +19,14 @@ export default function RateControlPage() {
     return (
       <div className="page-stack">
         <SectionCard
-          title={connectionState === "offline" ? "Backend offline" : "Waiting for live data"}
-          subtitle="Rate control only appears once the backend publishes processed metrics."
+          title={connectionState === "offline" ? "Backend unavailable" : "Waiting for rate-control metrics"}
+          subtitle="Rate control appears after the backend publishes processed telemetry."
         >
           <div className="inset-card">
             <p className="inset-text">
               {connectionState === "offline"
                 ? "No processed rate-control snapshot is available."
-                : "Live rate-control data is still loading."}
+                : "Live rate-control metrics are still loading."}
             </p>
           </div>
         </SectionCard>
@@ -47,8 +47,8 @@ export default function RateControlPage() {
     <div className="page-stack">
       <div className="dashboard-grid dashboard-grid-3">
         <SectionCard
-          title="Processed Ingestion Rate"
-          subtitle="Events admitted into the ML pipeline"
+          title="Processed Throughput"
+          subtitle="Events admitted into the ML inference pipeline"
         >
           <RateGaugeChart
             value={rateControl.currentRate}
@@ -59,12 +59,12 @@ export default function RateControlPage() {
 
         <SectionCard
           title="Rate Controls"
-          subtitle="Live stream pressure and throttling policy"
+          subtitle="Operator controls for stream pressure and processing limits"
         >
           <div className="control-stack">
             <div>
               <div className="control-row">
-                <span>Current incoming rate</span>
+                <span>Simulated incoming rate</span>
                 <span className="mono-text accent-cyan">{controls.simulatedRate} eps</span>
               </div>
               <input
@@ -105,7 +105,7 @@ export default function RateControlPage() {
 
             <div>
               <div className="control-row">
-                <span>Operator rate limit</span>
+                <span>Configured processing limit</span>
                 <span className="mono-text accent-amber">{controls.rateLimit} eps</span>
               </div>
               <input
@@ -128,12 +128,12 @@ export default function RateControlPage() {
 
         <div className="dashboard-grid dashboard-grid-single-gap">
           <MetricCard
-            label="Applied Limit"
+            label="Applied Processing Limit"
             value={`${rateControl.appliedRateLimit} eps`}
             hint={rateControl.controllerState}
           />
           <MetricCard
-            label="Deferred Backlog"
+            label="Queued Backlog"
             value={`${rateControl.streamBacklog}/${backlogCapacity}`}
             hint={
               loadSheddingActive
@@ -149,12 +149,12 @@ export default function RateControlPage() {
         <MetricCard
           label="Incoming Rate"
           value={`${rateControl.incomingRate} eps`}
-          hint="Traffic offered to ingestion"
+          hint="Events offered to ingestion"
         />
         <MetricCard
           label="Processed Rate"
           value={`${rateControl.processedRate} eps`}
-          hint="Traffic consumed by ML workers"
+          hint="Events consumed by ML workers"
         />
         <MetricCard
           label="Overload Risk"
@@ -165,8 +165,8 @@ export default function RateControlPage() {
 
       <div className="dashboard-grid dashboard-grid-2">
         <SectionCard
-          title="Incoming vs Applied Rate"
-          subtitle="Adaptive controller behavior"
+          title="Ingress, Processing, and Limits"
+          subtitle="Adaptive controller behavior over time"
         >
           <RateLimitChart
             data={rateControl.actualVsLimitSeries}
@@ -176,7 +176,7 @@ export default function RateControlPage() {
 
         <SectionCard
           title="Stream Backlog"
-          subtitle="Deferred events waiting for safe processing"
+          subtitle="Queued events waiting for processing capacity"
         >
           <StreamBacklogChart data={rateControl.streamBacklogSeries} />
         </SectionCard>
@@ -196,7 +196,7 @@ export default function RateControlPage() {
       </div>
 
       <SectionCard
-        title="Rate Limit Logs"
+        title="Ingestion Control Audit Logs"
         subtitle="Rate-control policy updates, throttling, and shedding events"
         className="governance-log-card"
       >

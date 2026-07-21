@@ -18,6 +18,7 @@ export default function ConfidenceHistogramChart({ data }) {
         <Tooltip />
         <Bar
           dataKey="count"
+          name="Prediction count"
           fill="#22c55e"
           radius={[6, 6, 0, 0]}
           isAnimationActive

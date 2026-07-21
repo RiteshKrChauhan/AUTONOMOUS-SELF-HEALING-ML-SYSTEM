@@ -16,13 +16,13 @@ export default function TopNavbar({
       : connectionState === "connecting"
         ? "Connecting"
         : "Offline";
-  const modelLabel = modelVersion ?? "Waiting for live data";
+  const modelLabel = modelVersion ?? "Waiting for model";
 
   return (
     <header className="topbar panel-card">
       <div className="topbar-row">
         <div>
-          <p className="topbar-kicker">Autonomous Self-Healing Streaming ML System</p>
+          <p className="topbar-kicker">Autonomous Streaming ML Operations</p>
           <h2 className="topbar-title">Industrial IoT Predictive Maintenance</h2>
         </div>
         <div className="topbar-actions">
@@ -41,10 +41,10 @@ export default function TopNavbar({
             onClick={onOpenScenarioModal}
             className="primary-action-btn"
             disabled={isInjecting || !isLive}
-            title="Choose and inject an anomaly scenario"
+            title="Run a controlled fault scenario"
           >
             {isInjecting ? <RotateCw size={15} /> : <Zap size={15} />}
-            {isInjecting ? "Injecting" : "Inject Scenario"}
+            {isInjecting ? "Running" : "Run Scenario"}
           </button>
           <button
             type="button"

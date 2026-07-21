@@ -1,5 +1,5 @@
 """
-Central registry for all anomaly injection scenarios.
+Central registry for all controlled fault scenarios.
 Each scenario is a class with a META dict and a static apply() method.
 """
 

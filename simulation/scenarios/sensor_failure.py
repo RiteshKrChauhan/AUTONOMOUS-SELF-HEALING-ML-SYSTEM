@@ -14,11 +14,11 @@ _STUCK_SENSORS = ["sensor_3", "sensor_9"]
 class SensorFailure:
     META = {
         "id": "sensor_failure",
-        "name": "Sensor Failure (Stuck)",
+        "name": "Stuck Sensor Failure",
         "severity": "High",
         "duration": 80,
-        "description": "2 sensors stuck at 0.0, simulating disconnected hardware.",
-        "expectedBehavior": "KS test detects zero-variance on stuck sensors. Isolation Forest flags every point. Retrain begins.",
+        "description": "Two sensors remain fixed at 0.0, simulating disconnected or grounded hardware.",
+        "expectedBehavior": "The KS test should detect zero variance on the affected sensors. Isolation Forest should flag the fault, then retraining should begin.",
         "tags": ["data-drift", "anomaly", "sensor-fault"],
     }
 

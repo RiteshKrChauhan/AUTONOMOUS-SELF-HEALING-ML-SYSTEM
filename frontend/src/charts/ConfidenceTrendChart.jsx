@@ -24,7 +24,7 @@ export default function ConfidenceTrendChart({ data }) {
         <XAxis {...xAxisProps} />
         <YAxis width={45} tick={{ fill: "#94a3b8", fontSize: 11 }} />
         <Tooltip labelFormatter={(value) => `${xAxisProps.tickFormatter?.(value) ?? ""}`} />
-        <Area type="monotone" dataKey="confidence" stroke="#38bdf8" fill="url(#confidenceFill)" strokeWidth={2.3} connectNulls {...chartAnimation} />
+        <Area type="monotone" dataKey="confidence" name="Prediction confidence" stroke="#38bdf8" fill="url(#confidenceFill)" strokeWidth={2.3} connectNulls {...chartAnimation} />
       </AreaChart>
     </ResponsiveContainer>
   );

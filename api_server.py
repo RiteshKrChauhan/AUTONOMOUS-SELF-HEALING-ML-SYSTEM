@@ -1,5 +1,5 @@
 """
-api_server.py — Autonomous Self-Healing ML Dashboard Backend
+api_server.py - Autonomous Self-Healing ML Dashboard Backend
 
 Full pipeline:
   - Random Forest (sklearn) trained via ml/train.py
@@ -12,7 +12,7 @@ Full pipeline:
   - Shadow A/B evaluation before model promotion via ml/shadow_evaluator.py
   - Adaptive cooldown via decision/adaptive_cooldown.py
   - Decision engine via decision/engine.py
-  - 8 injectable anomaly scenarios via simulation/scenarios/
+  - 8 controlled fault scenarios via simulation/scenarios/
 """
 
 from collections import Counter, deque
@@ -120,7 +120,7 @@ class StreamingMLRuntime:
         self.sample_index = 0
         self.pointer = 0
         self.last_advance = time.monotonic()
-        self.last_action = "System online — monitoring active sensor stream"
+        self.last_action = "System online - monitoring active sensor stream"
         self.system_state = "Monitoring"
 
         # Active scenario state
@@ -135,7 +135,7 @@ class StreamingMLRuntime:
         self.current_feature_window = deque(maxlen=60)
         self.action_reasons = Counter()
 
-        # Governance — audit trail, alerts, timeline, model history
+        # Governance - audit trail, alerts, timeline, model history
         self.audit = AuditLog()
 
         # Pipeline components
@@ -161,8 +161,8 @@ class StreamingMLRuntime:
         self.audit.append_timeline("Monitoring system online", "Healthy")
         self.audit.append_model_history(self.model_version)
         self.audit.append_audit(
-            "System Initialised",
-            "Predictive maintenance model loaded — baseline established from historical engine-unit records",
+            "System Initialized",
+            "Predictive maintenance model loaded - baseline established from historical engine-unit records",
             f"Active model: v1.0.{self.model_version} | Status: Nominal",
             "Healthy",
             "MODEL",
@@ -341,7 +341,7 @@ class StreamingMLRuntime:
             self.audit.append_timeline("Sensor readings returned to nominal range", "Healthy")
             self.audit.append_audit(
                 "Disturbance Cleared",
-                "Anomalous sensor pattern has subsided — all monitored channels within expected bounds",
+                "Anomalous sensor pattern has subsided - all monitored channels are within expected bounds",
                 "Drift monitors returning to standard alert thresholds",
                 "Healthy",
                 "DRIFT",
@@ -449,13 +449,13 @@ class StreamingMLRuntime:
 
         if is_retraining or drift_triggered:
             # Drop to 60% of ceiling so the retrain thread gets the CPU it needs.
-            # Events accumulate in the backlog during this window — that is expected.
+            # Events accumulate in the backlog during this window; that is expected.
             target = max(1.0, ceiling * 0.60)
             state = "Protecting"
             if is_retraining:
-                reason = "Ingestion rate reduced — model refresh in progress, processing capacity temporarily reserved"
+                reason = "Ingestion rate reduced - model refresh in progress, processing capacity temporarily reserved"
             else:
-                reason = "Elevated drift index detected — ingestion rate reduced pre-emptively to maintain model accuracy"
+                reason = "Elevated drift index detected - ingestion rate reduced pre-emptively to maintain model accuracy"
 
         # --- Rule 3: Drain backlog at full ceiling when system is healthy ---
         # Only enter Draining if backlog is meaningfully large (> 5 events).
@@ -464,9 +464,9 @@ class StreamingMLRuntime:
         elif self.stream_backlog > 5:
             target = ceiling
             state = "Draining"
-            reason = "Clearing backlog — processing at full operator limit"
+            reason = "Clearing backlog - processing at full operator limit"
 
-        # --- Rule 4: Nominal — no backlog, no retrain ---
+        # --- Rule 4: Nominal - no backlog, no retrain ---
         else:
             target = ceiling
             state = "Nominal"
@@ -483,7 +483,7 @@ class StreamingMLRuntime:
                 # Draining = catching up on a shrinking backlog
                 # Throttling = backlog is actively growing because incoming > limit
                 state = "Throttling"
-                reason = "Sensor data arrival rate exceeds processing capacity — readings queuing"
+                reason = "Sensor data arrival rate exceeds processing capacity - readings are queuing"
             elif state == "Nominal":
                 reason = "Sensor data arrival rate is above the current adaptive processing limit"
 
@@ -499,7 +499,7 @@ class StreamingMLRuntime:
             )
             and (
                 # For Protecting (pre-emptive drift throttle), only log when backlog
-                # has actual queue pressure — avoids noise on a healthy stable stream.
+                # has actual queue pressure; avoids noise on a healthy stable stream.
                 state == "Throttling" or self.stream_backlog > 5
             )
             and self.stream_backlog < STREAM_QUEUE_MAXLEN
@@ -508,9 +508,9 @@ class StreamingMLRuntime:
             self.last_rate_control_audit_sample = self.sample_index
             self.action_reasons["Rate control"] += 1
             timeline_msg = (
-                "Sensor ingestion throttled — queue depth increasing"
+                "Sensor ingestion throttled - queue depth increasing"
                 if state == "Throttling"
-                else "Ingestion rate reduced — model refresh underway"
+                else "Ingestion rate reduced - model refresh underway"
             )
             self.audit.append_timeline(timeline_msg, "Warning")
             self.audit.append_audit(
@@ -524,7 +524,7 @@ class StreamingMLRuntime:
         return self.applied_rate_limit
 
     # -----------------------------------------------------------------------
-    # Retraining pipeline: performance gate → shadow evaluation
+    # Retraining pipeline: performance gate -> shadow evaluation
     # -----------------------------------------------------------------------
 
     def _maybe_retrain(self, action, drift_score, rolling_avg):
@@ -549,13 +549,13 @@ class StreamingMLRuntime:
         self.retrain_job_active = True
         self.cooldown.mark_retrain(sample_index)
         self.system_state = "Self-healing"
-        self.last_action = "Predictive model refresh initiated — training on recent field data"
+        self.last_action = "Predictive model refresh initiated - training on recent field data"
         self.action_reasons["Background retrain"] += 1
         mae_str = f"{rolling_avg:.1f}" if rolling_avg is not None else "N/A"
         self.audit.append_timeline("Predictive model refresh initiated", "Warning")
         self.audit.append_audit(
             "Model Refresh Initiated",
-            f"Cumulative drift index {drift_score:.2f} exceeds adaptive threshold — retraining on recent field observations",
+            f"Cumulative drift index {drift_score:.2f} exceeds adaptive threshold - retraining on recent field observations",
             f"Candidate model training in background | Rolling prediction error: {mae_str} cycles",
             "Warning",
             "MODEL",
@@ -673,12 +673,12 @@ class StreamingMLRuntime:
                     result["new_model"], result["new_scaler"]
                 )
                 self.system_state = "Shadowing"
-                self.last_action = f"Candidate model under parallel evaluation — running alongside production"
+                self.last_action = f"Candidate model under parallel evaluation - running alongside production"
                 self.action_reasons["Shadow evaluation"] += 1
                 self.audit.append_timeline("Candidate model in parallel evaluation", "Warning")
                 self.audit.append_audit(
                     "Parallel Model Evaluation",
-                    f"Candidate model passed quality gate (error reduction verified) — evaluating over {self.shadow_evaluator.window_size} live sensor cycles",
+                    f"Candidate model passed quality gate (error reduction verified) - evaluating over {self.shadow_evaluator.window_size} live sensor cycles",
                     f"Candidate prediction error: {cand_str} cycles | Production prediction error: {curr_str} cycles",
                     result["status"],
                     "MODEL",
@@ -695,14 +695,14 @@ class StreamingMLRuntime:
             self.audit.append_audit(
                 gate_event,
                 gate_detail,
-                "Production model retained — no change to active inference pipeline",
+                "Production model retained - no change to active inference pipeline",
                 result["status"],
                 "MODEL",
             )
             if result["event"] in {"Retrain Failed", "Retrain Rejected"}:
                 self.audit.append_alert(
                     "Warning",
-                    f"Model refresh attempt did not meet quality threshold — production model continues unchanged"
+                    f"Model refresh attempt did not meet quality threshold - production model continues unchanged"
                 )
 
     # -----------------------------------------------------------------------
@@ -728,8 +728,8 @@ class StreamingMLRuntime:
             ):
                 self.last_load_shedding_audit_total = self.load_shedding_total
                 self.audit.append_audit(
-                    "Sensor Data Loss — Queue Overflow",
-                    "Ingestion buffer at capacity — oldest unprocessed sensor readings are being discarded to prevent backlog growth",
+                    "Sensor Data Loss - Queue Overflow",
+                    "Ingestion buffer at capacity - oldest unprocessed sensor readings are being discarded to prevent backlog growth",
                     f"Total readings dropped this session: {self.load_shedding_total} | Immediate operator review recommended",
                     "Critical",
                     "RATE_LIMIT",
@@ -828,17 +828,17 @@ class StreamingMLRuntime:
                 self.shadow_evaluator.stop_evaluation()
                 self.system_state = "Monitoring"
                 self.last_action = (
-                    f"Model updated to v1.0.{self.model_version} — improved accuracy confirmed"
+                    f"Model updated to v1.0.{self.model_version} - improved accuracy confirmed"
                 )
                 self.action_reasons["Shadow promoted"] += 1
                 self.audit.append_model_history(self.model_version)
                 self.audit.append_timeline(
-                    f"Model v1.0.{self.model_version} deployed — accuracy improvement confirmed",
+                    f"Model v1.0.{self.model_version} deployed - accuracy improvement confirmed",
                     "Healthy",
                 )
                 self.audit.append_audit(
                     "Model Updated",
-                    f"Candidate model confirmed superior over {self.shadow_evaluator.window_size}-cycle evaluation window — prediction error reduced from {prod_mae:.1f} to {shadow_mae:.1f} cycles",
+                    f"Candidate model confirmed superior over {self.shadow_evaluator.window_size}-cycle evaluation window - prediction error reduced from {prod_mae:.1f} to {shadow_mae:.1f} cycles",
                     f"Active model promoted to v1.0.{self.model_version} | Monitoring resumed",
                     "Healthy",
                     "MODEL",
@@ -852,18 +852,18 @@ class StreamingMLRuntime:
                 except Exception:
                     pass  # Never crash model promotion due to anomaly detector refit
             elif prod_mae is not None:
-                # Window complete but shadow wasn't better → implicit rollback
+                # Window complete but shadow was not better; production remains active.
                 self.shadow_evaluator.stop_evaluation()
                 self.system_state = "Monitoring"
-                self.last_action = "Candidate model evaluation complete — production model retained"
+                self.last_action = "Candidate model evaluation complete - production model retained"
                 self.action_reasons["Shadow rejected"] += 1
                 self.audit.append_timeline(
-                    "Model evaluation complete — production model retained", "Warning"
+                    "Model evaluation complete - production model retained", "Warning"
                 )
                 self.audit.append_audit(
                     "Model Refresh Superseded",
                     f"Candidate did not demonstrate sufficient accuracy improvement over {self.shadow_evaluator.window_size}-cycle window (error: {shadow_mae:.1f} vs {prod_mae:.1f} cycles)",
-                    "Production model retained — monitoring continues at standard thresholds",
+                    "Production model retained - monitoring continues at standard thresholds",
                     "Warning",
                     "MODEL",
                 )
@@ -913,12 +913,12 @@ class StreamingMLRuntime:
                 severity_label = "Critical" if drift_score > 0.8 else "Warning"
                 self.audit.append_alert(
                     severity_label,
-                    f"Abnormal sensor behaviour persisting — drift index {drift_score:.2f} | {self.active_scenario_remaining} observation cycles remaining",
+                    f"Abnormal sensor behavior persisting - drift index {drift_score:.2f} | {self.active_scenario_remaining} observation cycles remaining",
                 )
                 self.audit.append_audit(
                     "Persistent Sensor Anomaly",
-                    f"Anomalous pattern sustained across {self.active_scenario_cycle} consecutive cycles — statistical drift confirmed",
-                    "Drift monitors at heightened sensitivity — automatic model assessment triggered",
+                    f"Anomalous pattern sustained across {self.active_scenario_cycle} consecutive cycles - statistical drift confirmed",
+                    "Drift monitors at heightened sensitivity - automatic model assessment triggered",
                     status,
                     "DRIFT",
                 )
@@ -928,36 +928,36 @@ class StreamingMLRuntime:
             event_type = "DRIFT" if action.startswith("RETRAIN") else "CONFIDENCE"
             drift_channels = sum([int(adwin_drift), int(data_drift)])
             if action == "RETRAIN_URGENT":
-                timeline_event = "Degradation pattern escalating — urgent model refresh queued"
+                timeline_event = "Degradation pattern escalating - urgent model refresh queued"
                 audit_event = "Degradation Pattern Escalation"
                 audit_reason = (
-                    f"Drift index {drift_score:.2f} — statistical shift confirmed across {drift_channels} detection channel(s)"
+                    f"Drift index {drift_score:.2f} - statistical shift confirmed across {drift_channels} detection channel(s)"
                     f" | Prediction error trending {'upward' if trend else 'stable'}"
                 )
-                audit_action = "Autonomous health policy has escalated — model refresh queued at next eligible window"
+                audit_action = "Autonomous health policy has escalated - model refresh queued at next eligible window"
             elif action == "RETRAIN":
-                timeline_event = "Sensor drift exceeds threshold — model refresh scheduled"
+                timeline_event = "Sensor drift exceeds threshold - model refresh scheduled"
                 audit_event = "Predictive Health Degradation"
                 audit_reason = (
-                    f"Drift index {drift_score:.2f} — {drift_channels} detection channel(s) signalling distributional shift"
+                    f"Drift index {drift_score:.2f} - {drift_channels} detection channel(s) signaling distributional shift"
                     f" | Current prediction error: {error:.1f} cycles"
                 )
                 audit_action = "Autonomous health policy scheduling model refresh when cooldown elapses"
             elif action == "ALERT":
-                timeline_event = "Prediction confidence degraded — operator review advised"
+                timeline_event = "Prediction confidence degraded - operator review advised"
                 audit_event = "Confidence Threshold Breach"
                 audit_reason = (
-                    f"Prediction confidence below operational threshold — error {error:.1f} cycles"
+                    f"Prediction confidence below operational threshold - error {error:.1f} cycles"
                     f" | Drift index: {drift_score:.2f}"
                 )
-                audit_action = "Operator review advised — system continues autonomous monitoring"
+                audit_action = "Operator review advised - system continues autonomous monitoring"
             else:  # MONITOR
-                timeline_event = "Elevated drift observed — monitoring at increased frequency"
+                timeline_event = "Elevated drift observed - monitoring at increased frequency"
                 audit_event = "Elevated Sensor Drift"
                 audit_reason = (
-                    f"Drift index {drift_score:.2f} approaching alert threshold — {drift_channels} channel(s) flagged"
+                    f"Drift index {drift_score:.2f} approaching alert threshold - {drift_channels} channel(s) flagged"
                 )
-                audit_action = "No intervention required — monitoring cadence increased"
+                audit_action = "No intervention required - monitoring cadence increased"
             self.audit.append_timeline(timeline_event, status)
             self.audit.append_audit(
                 audit_event,
@@ -1291,13 +1291,13 @@ class StreamingMLRuntime:
             self.active_scenario_remaining = meta["duration"]
             self.active_scenario_cycle = 0
             self.last_action = (
-                f"Fault condition activated — drift monitors and health policy on heightened alert"
+                f"Fault condition activated - drift monitors and health policy on heightened alert"
             )
             self.system_state = "Self-healing"
             alert_severity = "Critical" if meta["severity"] in {"Critical", "High"} else "Warning"
-            self.audit.append_timeline("Fault condition introduced — monitors escalated", "Critical")
+            self.audit.append_timeline("Fault condition introduced - monitors escalated", "Critical")
             self.audit.append_audit(
-                "Fault Simulation Activated",
+                "Fault Scenario Activated",
                 meta["description"],
                 f"Duration: {meta['duration']} observation cycles | Severity class: {meta['severity']}",
                 "Critical",
@@ -1305,7 +1305,7 @@ class StreamingMLRuntime:
             )
             self.audit.append_alert(
                 alert_severity,
-                f"Anomalous sensor pattern introduced — drift detection and health policy on heightened alert",
+                f"Anomalous sensor pattern introduced - drift detection and health policy on heightened alert",
             )
             return {"ok": True, "scenario": meta}
 

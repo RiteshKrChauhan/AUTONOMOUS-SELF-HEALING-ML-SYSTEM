@@ -18,8 +18,8 @@ export default function DistributionShiftChart({ data }) {
         <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} />
         <Tooltip />
         <Legend />
-        <Bar dataKey="baseline" fill="#22d3ee" radius={[4, 4, 0, 0]} />
-        <Bar dataKey="current" fill="#f97316" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="baseline" name="Baseline" fill="#22d3ee" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="current" name="Current window" fill="#f97316" radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );

@@ -11,12 +11,25 @@ const CLASS_MAP = {
   RETRAIN_URGENT: "status-pill status-critical",
 };
 
+const LABEL_MAP = {
+  STABLE: "Stable",
+  WATCH: "Watch",
+  MONITOR: "Monitor",
+  ALERT: "Alert",
+  RETRAIN: "Retrain",
+  RETRAIN_URGENT: "Urgent Retrain",
+};
+
+export function formatStatusLabel(value) {
+  return LABEL_MAP[value] || value;
+}
+
 export default function StatusPill({ value }) {
   return (
     <span
       className={CLASS_MAP[value] || "status-pill status-neutral"}
     >
-      {value}
+      {formatStatusLabel(value)}
     </span>
   );
 }

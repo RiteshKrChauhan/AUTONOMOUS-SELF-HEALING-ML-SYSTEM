@@ -1,5 +1,5 @@
 """
-governance/audit_log.py — Centralised in-memory audit and timeline store.
+governance/audit_log.py - Centralized in-memory audit and timeline store.
 
 Manages four ring-buffers that power the dashboard:
   - audit_logs   : structured event trail (shown in Governance Logs panel)
@@ -61,7 +61,7 @@ class AuditLog:
             reason     : Machine-readable reason string (metrics, MAE, etc.).
             action     : Human description of what the system did.
             status     : 'Healthy' | 'Warning' | 'Critical'
-            event_type : Category tag — 'MODEL' | 'DRIFT' | 'CONFIDENCE' | 'RATE_LIMIT'
+            event_type : Category tag - 'MODEL' | 'DRIFT' | 'CONFIDENCE' | 'RATE_LIMIT'
         """
         _, stamp = self._now_parts()
         self.audit_logs.appendleft(
@@ -104,7 +104,7 @@ class AuditLog:
         Record a model promotion event if the version has actually changed.
 
         Args:
-            model_version : Integer suffix of the version string (e.g. 2 → v1.0.2).
+            model_version : Integer suffix of the version string (e.g. 2 -> v1.0.2).
         """
         clock, _ = self._now_parts()
         version_str = f"v1.0.{model_version}"

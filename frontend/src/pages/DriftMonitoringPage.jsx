@@ -7,17 +7,21 @@ import AlertsTimeline from "../components/AlertsTimeline";
 import SectionCard from "../components/SectionCard";
 
 export default function DriftMonitoringPage() {
-  const { dashboardData } = useOutletContext();
+  const { dashboardData, connectionState } = useOutletContext();
 
   if (!dashboardData?.drift) {
     return (
       <div className="page-stack">
         <SectionCard
-          title="Waiting for live data"
-          subtitle="The backend has not returned processed drift metrics yet."
+          title={connectionState === "offline" ? "Backend unavailable" : "Waiting for drift metrics"}
+          subtitle="Drift monitoring appears after the backend publishes processed telemetry."
         >
           <div className="inset-card">
-            <p className="inset-text">No processed drift snapshot is available.</p>
+            <p className="inset-text">
+              {connectionState === "offline"
+                ? "No processed drift snapshot is available."
+                : "Live drift metrics are still loading."}
+            </p>
           </div>
         </SectionCard>
       </div>
@@ -29,14 +33,14 @@ export default function DriftMonitoringPage() {
       <div className="dashboard-grid dashboard-grid-2">
         <SectionCard
           title="Feature Distribution Shift"
-          subtitle="Baseline vs current distribution snapshots"
+          subtitle="Baseline distribution compared with the current feature window"
         >
           <DistributionShiftChart data={dashboardData.drift.featureDistributionShift} />
         </SectionCard>
 
         <SectionCard
           title="Drift Score Per Feature"
-          subtitle="Feature-level drift intensity"
+          subtitle="Highest contributing feature-level drift signals"
         >
           <FeatureDriftBarChart data={dashboardData.drift.featureScores} />
         </SectionCard>
@@ -44,22 +48,22 @@ export default function DriftMonitoringPage() {
 
       <div className="dashboard-grid dashboard-grid-2">
         <SectionCard
-          title="Concept Drift"
-          subtitle="Accuracy and error trend over time"
+          title="Model Error Drift"
+          subtitle="Accuracy and prediction error over time"
         >
           <AccuracyErrorChart data={dashboardData.drift.conceptSeries} />
         </SectionCard>
 
         <SectionCard
-          title="Confidence Trend"
-          subtitle="Confidence stability in streaming predictions"
+          title="Prediction Confidence"
+          subtitle="Confidence stability across recent predictions"
         >
           <ConfidenceTrendChart data={dashboardData.drift.conceptSeries} />
         </SectionCard>
       </div>
 
       <SectionCard
-        title="Alerts Timeline"
+        title="Operational Alerts"
         subtitle="Latest drift and confidence-related events"
       >
         <AlertsTimeline alerts={dashboardData.drift.alerts} />

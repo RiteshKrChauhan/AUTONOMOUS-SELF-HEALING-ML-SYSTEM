@@ -13,14 +13,14 @@ export default function SystemOverviewPage() {
     return (
       <div className="page-stack">
         <SectionCard
-          title={connectionState === "offline" ? "Backend offline" : "Waiting for live data"}
-          subtitle="The dashboard renders only processed metrics from the backend."
+          title={connectionState === "offline" ? "Backend unavailable" : "Waiting for processed telemetry"}
+          subtitle="Operational metrics appear after the backend publishes a dashboard snapshot."
         >
           <div className="inset-card">
             <p className="inset-text">
               {connectionState === "offline"
-                ? "The backend did not return a processed dashboard snapshot."
-                : "Live dashboard data is still loading."}
+                ? "The backend did not return a dashboard snapshot."
+                : "Live operational data is still loading."}
             </p>
           </div>
         </SectionCard>
@@ -58,7 +58,7 @@ export default function SystemOverviewPage() {
           </span>
         </div>
         <div className="live-ops-item">
-          <span>Worker tick</span>
+          <span>Processing tick</span>
           <strong>{meta?.workerTickMs ?? 50} ms</strong>
         </div>
         <div className="live-ops-item">
@@ -73,15 +73,15 @@ export default function SystemOverviewPage() {
 
       <div className="dashboard-grid dashboard-grid-3">
         <MetricCard label="System Status" value={dashboardData.overview.systemStatus} hint="Composite health signal" status={dashboardData.overview.systemStatus} />
-        <MetricCard label="Data Rate" value={`${latest.dataRate} eps`} hint="Current stream ingress" />
-        <MetricCard label="Drift Score" value={latest.driftScore} hint="Combined KS + ADWIN drift score" />
+        <MetricCard label="Ingestion Rate" value={`${latest.dataRate} eps`} hint="Current event ingress" />
+        <MetricCard label="Drift Score" value={latest.driftScore} hint="Combined KS and ADWIN signal" />
         <MetricCard label="Active Model Version" value={dashboardData.overview.activeModelVersion} hint="Serving model in production" />
         <MetricCard label="Latency" value={`${latest.latency} ms`} hint="End-to-end processing latency" />
         <MetricCard label="Stream Backlog" value={`${latest.streamBacklog}`} hint="Unprocessed backlog count" />
       </div>
 
       <div className="dashboard-grid dashboard-grid-3">
-        <SectionCard title="Live Prediction" subtitle="Latest turbine RUL inference">
+        <SectionCard title="Latest Prediction" subtitle="Most recent turbine RUL inference">
           <div className="live-sample-grid">
             <div>
               <p className="mini-label">Predicted RUL</p>
@@ -114,7 +114,7 @@ export default function SystemOverviewPage() {
             </div>
             <div className="runtime-row">
               <span>Model action</span>
-              <span className="mono-text">{latest.action}</span>
+              <StatusPill value={latest.action} />
             </div>
             <div className="runtime-row">
               <span>ADWIN drift</span>
@@ -135,15 +135,15 @@ export default function SystemOverviewPage() {
       </div>
 
       <div className="dashboard-grid dashboard-grid-2">
-        <SectionCard title="Data Rate vs Latency" subtitle="Real-time throughput and responsiveness">
+        <SectionCard title="Ingestion Rate vs Latency" subtitle="Throughput and processing responsiveness">
           <DataRateLatencyChart data={dashboardData.overview.series} />
         </SectionCard>
-        <SectionCard title="Drift Score Over Time" subtitle="Watch early drift escalation">
+        <SectionCard title="Drift Score Over Time" subtitle="Early warning signal for data and concept drift">
           <DriftScoreLineChart data={dashboardData.overview.series} />
         </SectionCard>
       </div>
 
-      <SectionCard title="Confidence Distribution" subtitle="Prediction confidence histogram">
+      <SectionCard title="Prediction Confidence Distribution" subtitle="Histogram of recent confidence scores">
         <ConfidenceHistogramChart data={dashboardData.overview.confidenceHistogram} />
       </SectionCard>
     </div>

@@ -15,7 +15,7 @@ export default function RateGaugeChart({ value, max = 40, capacityLabel = "activ
     <div className="rate-gauge">
       <ResponsiveContainer width="100%" height="100%">
         <RadialBarChart
-          data={[{ name: "rate", value: safeValue, fill: "#22d3ee" }]}
+          data={[{ name: "Processed throughput", value: safeValue, fill: "#22d3ee" }]}
           startAngle={210}
           endAngle={-30}
           innerRadius="68%"

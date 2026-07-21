@@ -1,11 +1,7 @@
 """
 Intermittent Spikes scenario.
-Every 7th cycle, 2 randomly selected sensors spike ±12σ.
-All other cycles are completely normal.
-
-This tests the Isolation Forest anomaly detector — it should flag the spiked cycles
-as outliers. ADWIN may or may not fire depending on how frequently errors spike.
-It models electrical transients or measurement glitches in the sensor network.
+Every 7th cycle, 2 randomly selected sensors spike by ±12σ.
+All other cycles remain normal.
 """
 
 _ALL_SENSORS = [f"sensor_{i}" for i in range(1, 22)]
@@ -17,8 +13,8 @@ class IntermittentSpikes:
         "name": "Intermittent Sensor Spikes",
         "severity": "Low",
         "duration": 90,
-        "description": "2 random sensors spike ±12σ every 7 cycles. Normal between spikes.",
-        "expectedBehavior": "Isolation Forest flags spike cycles as anomalies. ADWIN may not detect (too infrequent). No retrain expected.",
+        "description": "Two random sensors spike by ±12σ every 7 cycles, with normal readings between spikes.",
+        "expectedBehavior": "Isolation Forest should flag spike cycles as anomalies. ADWIN may stay quiet because the issue is intermittent, so retraining is not expected.",
         "tags": ["anomaly", "intermittent", "isolation-forest"],
     }
 

@@ -29,7 +29,7 @@ export default function StreamBacklogChart({ data }) {
           <XAxis {...xAxisProps} />
           <YAxis domain={[0, 600]} width={45} tick={{ fill: "#94a3b8", fontSize: 11 }} />
           <Tooltip labelFormatter={(value) => `${xAxisProps.tickFormatter?.(value) ?? ""}`} />
-          <Area type="monotone" dataKey="streamBacklog" name="Stream backlog" stroke="#f97316" fill="url(#streamBacklogFill)" strokeWidth={2.4} dot={false} connectNulls {...chartAnimation} />
+          <Area type="monotone" dataKey="streamBacklog" name="Queued backlog" stroke="#f97316" fill="url(#streamBacklogFill)" strokeWidth={2.4} dot={false} connectNulls {...chartAnimation} />
           {last ? <ReferenceDot x={last.sampleIndex} y={last.streamBacklog} r={4} fill="#f97316" stroke="#0f172a" /> : null}
         </AreaChart>
       </ResponsiveContainer>

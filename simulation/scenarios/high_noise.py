@@ -1,8 +1,6 @@
 """
 High Noise scenario.
-Multiplies all sensor variance by ×5 without shifting the mean.
-Tests whether the performance gate correctly REJECTS a candidate model
-trained on high-noise data because it will have higher validation MAE.
+Multiplies all sensor variance by 5x without shifting the mean.
 """
 
 _ALL_SENSORS = [f"sensor_{i}" for i in range(1, 22)]
@@ -14,8 +12,8 @@ class HighNoise:
         "name": "High Sensor Noise",
         "severity": "Medium",
         "duration": 60,
-        "description": "Sensor variance ×5 with no mean shift. Simulates electrical interference.",
-        "expectedBehavior": "Confidence intervals widen. Performance gate likely REJECTS retrain candidate (noisy training data → higher validation MAE).",
+        "description": "Sensor variance increases 5x with no mean shift, simulating electrical interference.",
+        "expectedBehavior": "Confidence should fall as uncertainty increases. The quality gate should reject a noisy retrain candidate if validation error worsens.",
         "tags": ["confidence", "noise", "gate-rejection"],
     }
 

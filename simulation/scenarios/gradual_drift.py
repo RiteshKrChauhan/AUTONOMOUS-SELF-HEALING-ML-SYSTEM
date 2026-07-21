@@ -1,6 +1,7 @@
 """
 Gradual Sensor Drift scenario.
-Slowly shifts 4 key sensors by +0.3σ every 10 cycles, simulating progressive wear.
+Slowly shifts 4 key sensors by +0.3σ every 10 cycles, simulating
+progressive component wear.
 """
 
 _DRIFT_SENSORS = ["sensor_2", "sensor_3", "sensor_4", "sensor_11"]
@@ -12,8 +13,8 @@ class GradualDrift:
         "name": "Gradual Sensor Drift",
         "severity": "Medium",
         "duration": 100,
-        "description": "4 sensors slowly drift +0.3σ every 10 cycles, simulating progressive wear.",
-        "expectedBehavior": "ADWIN detects rising error after ~40-60 cycles. KS test fires eventually. System retrains.",
+        "description": "Four key sensors drift by +0.3σ every 10 cycles, simulating progressive component wear.",
+        "expectedBehavior": "Error drift should rise after roughly 40-60 cycles. Feature drift should follow, then the system schedules retraining.",
         "tags": ["adwin", "data-drift", "gradual"],
     }
 

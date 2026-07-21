@@ -16,7 +16,7 @@ export default function FeatureDriftBarChart({ data }) {
         <XAxis dataKey="feature" tick={{ fill: "#94a3b8", fontSize: 11 }} />
         <YAxis domain={[0, 1]} tick={{ fill: "#94a3b8", fontSize: 11 }} />
         <Tooltip />
-        <Bar dataKey="score" fill="#a855f7" radius={[6, 6, 0, 0]} />
+        <Bar dataKey="score" name="Feature drift score" fill="#a855f7" radius={[6, 6, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );

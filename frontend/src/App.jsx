@@ -26,6 +26,7 @@ export default function App() {
   const mountedRef = useRef(false);
   const dashboardRequestInFlight = useRef(false);
   const dashboardRequestPromise = useRef(null);
+  const pendingControlsRef = useRef(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -98,15 +99,8 @@ export default function App() {
     }
   }
 
-  // pendingControls holds slider values that the user is mid-drag.
-  // We update local state immediately (for responsive UI) but only POST
-  // to the backend when the user releases the slider (onPointerUp).
-  const pendingControlsRef = useRef(null);
-
   function handleControlsChange(nextControls) {
-    // Optimistically update local state so the slider label moves in real-time.
     setControls((prev) => ({ ...prev, ...nextControls }));
-    // Record the latest intended value — will be flushed on pointer release.
     pendingControlsRef.current = { ...(pendingControlsRef.current ?? {}), ...nextControls };
   }
 
@@ -117,7 +111,7 @@ export default function App() {
     try {
       await updateControls(pending);
       await refreshDashboard({ queueAfterCurrent: true });
-    } catch (error) {
+    } catch {
       setConnectionState("offline");
     }
   }

@@ -90,11 +90,11 @@ export default function AnomalyModal({ isOpen, onClose, onInject, isInjecting })
           <div className="modal-header-row">
             <div>
               <h2 id="modal-title" className="modal-title">
-                Inject Anomaly Scenario
+                Run Fault Scenario
               </h2>
               <p className="modal-subtitle">
-                Each scenario tests a different aspect of the self-healing pipeline.
-                Select one to simulate and observe the system&apos;s autonomous response.
+                Select a controlled operating condition to validate drift detection,
+                rate control, and autonomous model governance.
               </p>
             </div>
             <button className="modal-close-btn" onClick={onClose} aria-label="Close">
@@ -106,7 +106,7 @@ export default function AnomalyModal({ isOpen, onClose, onInject, isInjecting })
         <div className="modal-body">
           <div className="scenario-grid">
             {isLoading ? (
-              <div className="scenario-empty-state">Loading live scenarios...</div>
+              <div className="scenario-empty-state">Loading operating scenarios...</div>
             ) : scenarios.length ? (
               scenarios.map((scenario) => (
                 <button
@@ -122,14 +122,14 @@ export default function AnomalyModal({ isOpen, onClose, onInject, isInjecting })
                     <span className="scenario-tag">{scenario.duration} cycles</span>
                   </div>
                   <div className="scenario-expected">
-                    <p className="scenario-expected-label">Expected response</p>
+                    <p className="scenario-expected-label">Expected system response</p>
                     <p className="scenario-expected-text">{scenario.expectedBehavior}</p>
                   </div>
                 </button>
               ))
             ) : (
               <div className="scenario-empty-state">
-                {loadError || "No live scenarios are available."}
+                {loadError || "No operating scenarios are available."}
               </div>
             )}
           </div>
@@ -150,7 +150,7 @@ export default function AnomalyModal({ isOpen, onClose, onInject, isInjecting })
             disabled={!selected || isInjecting || isLoading}
             onClick={handleInject}
           >
-            {isInjecting ? "Injecting..." : "Inject Selected Scenario"}
+            {isInjecting ? "Running..." : "Run Selected Scenario"}
           </button>
         </div>
       </div>

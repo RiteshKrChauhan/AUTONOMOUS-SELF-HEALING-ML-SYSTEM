@@ -11,7 +11,7 @@ const navItems = [
   { to: "/", label: "System Overview", icon: Home },
   { to: "/drift-monitoring", label: "Drift Monitoring", icon: AlertTriangle },
   { to: "/rate-control", label: "Rate Control", icon: Gauge },
-  { to: "/self-healing", label: "Self-Healing & Logs", icon: ShieldCheck },
+  { to: "/self-healing", label: "Model Governance", icon: ShieldCheck },
 ];
 
 export default function Sidebar() {
@@ -23,7 +23,7 @@ export default function Sidebar() {
         </span>
         <div>
           <p className="sidebar-kicker">Industrial IoT</p>
-          <h1 className="sidebar-title">Self-Healing ML Ops</h1>
+          <h1 className="sidebar-title">Self-Healing ML Operations</h1>
         </div>
       </div>
 
