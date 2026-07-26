@@ -3,14 +3,14 @@ Central registry for all controlled fault scenarios.
 Each scenario is a class with a META dict and a static apply() method.
 """
 
-from simulation.scenarios.gradual_drift import GradualDrift
-from simulation.scenarios.sudden_spike import SuddenSpike
-from simulation.scenarios.high_noise import HighNoise
-from simulation.scenarios.sensor_failure import SensorFailure
-from simulation.scenarios.concept_drift import ConceptDrift
-from simulation.scenarios.correlated_drift import CorrelatedDrift
-from simulation.scenarios.intermittent_spikes import IntermittentSpikes
-from simulation.scenarios.drift_recovery import DriftRecovery
+from scenarios.gradual_drift import GradualDrift
+from scenarios.sudden_spike import SuddenSpike
+from scenarios.high_noise import HighNoise
+from scenarios.sensor_failure import SensorFailure
+from scenarios.concept_drift import ConceptDrift
+from scenarios.correlated_drift import CorrelatedDrift
+from scenarios.intermittent_spikes import IntermittentSpikes
+from scenarios.drift_recovery import DriftRecovery
 
 SCENARIO_REGISTRY = {
     "gradual_drift": GradualDrift,

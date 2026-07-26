@@ -34,7 +34,6 @@ export default function ActionReasonsPieChart({ data }) {
           cy="50%"
           innerRadius={55}
           outerRadius={95}
-          label
         >
           {data.map((entry, idx) => (
             <Cell key={entry.reason} fill={COLORS[idx % COLORS.length]} />

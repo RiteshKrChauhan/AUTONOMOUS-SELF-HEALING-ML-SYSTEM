@@ -12,7 +12,9 @@ Full pipeline:
   - Shadow A/B evaluation before model promotion via ml/shadow_evaluator.py
   - Adaptive cooldown via decision/adaptive_cooldown.py
   - Decision engine via decision/engine.py
-  - 8 controlled fault scenarios via simulation/scenarios/
+  - Adaptive ingestion rate control via rate_limiting/controller.py
+  - Dashboard metric helpers via metrics/calculator.py
+  - 8 controlled fault scenarios via scenarios/
 """
 
 from collections import Counter, deque
@@ -35,18 +37,25 @@ from drift.anomaly_detector import AnomalyDetector
 from drift.data_drift import DataDriftDetector
 from drift.error_monitor import ErrorMonitor
 from governance.audit_log import AuditLog
+from metrics.calculator import (
+    confidence_value,
+    status_from_metrics,
+    feature_scores,
+    distribution_shift,
+    confidence_histogram,
+)
 from ml.confidence_predictor import ConfidencePredictor
 from ml.performance_gate import ModelPerformanceGate
 from ml.shadow_evaluator import ShadowModelEvaluator
 from ml.train import train_model_with_holdout
-from simulation.scenarios.registry import SCENARIO_REGISTRY, get_scenario_list
+from rate_limiting.controller import RateLimitController, STREAM_QUEUE_MAXLEN
+from scenarios.registry import SCENARIO_REGISTRY, get_scenario_list
 
 
 FEATURE_COLUMNS = [f"op_setting_{i}" for i in range(1, 4)] + [
     f"sensor_{i}" for i in range(1, 22)
 ]
 
-STREAM_QUEUE_MAXLEN = 500
 STREAM_TICK_SECONDS = 0.05
 DASHBOARD_SNAPSHOT_SECONDS = 0.5
 INITIAL_STREAM_WARMUP_SAMPLES = 24
@@ -80,23 +89,11 @@ class StreamingMLRuntime:
 
         # Stream controls
         self.stream_rate = 8.0
-        self.rate_limit = 14.0
-        self.rate_limit_enabled = True
-        self.event_queue = deque(maxlen=STREAM_QUEUE_MAXLEN)
-        self.stream_backlog = 0
+        self.rate_limiter = RateLimitController(rate_limit=14.0, worker_capacity_limit=40.0)
         self.arrival_carry = 0.0
         self.processing_carry = 0.0
-        self.applied_rate_limit = self.rate_limit
-        self.worker_capacity_limit = 40.0
         self.current_incoming_rate = self.stream_rate
         self.current_processed_rate = 0.0
-        self.rate_control_state = "Nominal"
-        self.rate_control_reason = "Incoming traffic is within the configured limit"
-        self.last_rate_control_audit_sample = -1000
-        self.load_shedding_total = 0
-        self.load_shedding_events_since_snapshot = 0
-        self.last_load_shedding_at = None
-        self.last_load_shedding_audit_total = 0
         self.last_prediction_std = 5.0
         self._last_controls_audit: tuple = (None, None, None)  # (stream_rate, rate_limit, rate_limit_enabled) at last log
         self.incoming_events_since_snapshot = 0
@@ -352,176 +349,55 @@ class StreamingMLRuntime:
         return True
 
     # -----------------------------------------------------------------------
-    # Metrics helpers
+    # Metrics helpers  (delegated to metrics/calculator.py)
     # -----------------------------------------------------------------------
 
-    def _confidence_value(self, std, error):
-        return float(np.clip(1.0 - (std / 95.0) - (error / 320.0), 0.0, 1.0))
-
-    def _status_from_metrics(self, drift_score, rolling_avg, action):
-        if action in {"RETRAIN_URGENT", "ALERT"} or drift_score >= 0.82:
-            return "Critical"
-        if action in {"RETRAIN", "MONITOR", "WATCH"} or drift_score >= 0.48:
-            return "Warning"
-        if rolling_avg is not None and rolling_avg > 70:
-            return "Warning"
-        return "Healthy"
-
     def _feature_scores(self):
-        if not self.current_feature_window:
-            return [
-                {"feature": f, "score": 0.0}
-                for f in ["sensor_2", "sensor_4", "sensor_7", "sensor_11", "sensor_15", "sensor_20"]
-            ]
-        scores = []
-        for feature in FEATURE_COLUMNS:
-            values = [row[feature] for row in self.current_feature_window]
-            bm = self.baseline_means.get(feature, 0.0)
-            bs = max(self.baseline_stds.get(feature, 1.0), 0.5)
-            score = min(abs(float(np.mean(values)) - bm) / (3.0 * bs), 1.0)
-            scores.append({"feature": feature, "score": round(float(score), 3)})
-        scores.sort(key=lambda x: x["score"], reverse=True)
-        return scores[:8]
+        return feature_scores(
+            self.current_feature_window,
+            self.baseline_means,
+            self.baseline_stds,
+            FEATURE_COLUMNS,
+        )
 
-    def _distribution_shift(self, feature_scores):
-        output = []
-        for item in feature_scores[:6]:
-            feature = item["feature"]
-            values = [row[feature] for row in self.current_feature_window]
-            bm = self.baseline_means.get(feature, 0.0)
-            bs = max(self.baseline_stds.get(feature, 1.0), 0.5)
-            current_mean = float(np.mean(values)) if values else bm
-            output.append(
-                {
-                    "feature": feature,
-                    "baseline": 0.5,
-                    "current": round(
-                        float(np.clip(0.5 + (current_mean - bm) / (6 * bs), 0, 1)), 3
-                    ),
-                }
-            )
-        return output
+    def _distribution_shift(self, feature_scores_list):
+        return distribution_shift(
+            feature_scores_list,
+            self.current_feature_window,
+            self.baseline_means,
+            self.baseline_stds,
+        )
 
     def _histogram(self):
-        values = list(self.confidences)
-        buckets = [
-            (index / 10, (index + 1) / 10, f"{index / 10:.2f}-{(index + 1) / 10:.2f}")
-            for index in range(10)
-        ]
-        return [
-            {
-                "bucket": bucket,
-                "count": sum(
-                    1
-                    for v in values
-                    if (low <= v <= high if high == 1.0 else low <= v < high)
-                ),
-            }
-            for low, high, bucket in buckets
-        ]
+        return confidence_histogram(self.confidences)
 
     def _update_rate_controller(self, elapsed):
-        if not self.rate_limit_enabled:
-            self.applied_rate_limit = self.worker_capacity_limit
-            self.rate_control_state = "Bypassed"
-            self.rate_control_reason = "Rate limiting is disabled (ML worker capacity)"
-            return self.applied_rate_limit
-
+        """Delegate to rate_limiting/controller.py RateLimitController."""
         latest = self.series[-1] if self.series else {}
         latest_drift = float(latest.get("driftScore", 0.0))
-
-        # --- Rule 1: Hardware ceiling always applies ---
-        # The true ceiling is the LOWER of the operator-configured limit and the
-        # measured hardware capacity. Even if the operator sets 80 eps, the system
-        # will never attempt to process more than the machine can handle.
-        ceiling = float(np.clip(
-            min(self.rate_limit, self.worker_capacity_limit),
-            1.0,
-            self.worker_capacity_limit,
-        ))
-
-        # --- Rule 2: Protect when drift is detected or retraining is active ---
-        # Drift >= 0.65 is a strong signal that a retrain is imminent (actual retrain
-        # fires at drift > 0.68). Throttle early to free CPU headroom *before* the
-        # background thread spawns. Also throttle while retrain / shadow eval runs.
         is_retraining = self.retrain_job_active or self.shadow_evaluator.is_evaluating
-        drift_triggered = latest_drift >= 0.65
 
-        if is_retraining or drift_triggered:
-            # Drop to 60% of ceiling so the retrain thread gets the CPU it needs.
-            # Events accumulate in the backlog during this window; that is expected.
-            target = max(1.0, ceiling * 0.60)
-            state = "Protecting"
-            if is_retraining:
-                reason = "Ingestion rate reduced - model refresh in progress, processing capacity temporarily reserved"
-            else:
-                reason = "Elevated drift index detected - ingestion rate reduced pre-emptively to maintain model accuracy"
+        # Sync the controller's cached backlog counter from the live queue length.
+        # Pops happen externally (not through enqueue()), so the cache is stale
+        # after processing; this one-liner restores accuracy before the update().
+        self.rate_limiter.stream_backlog = len(self.rate_limiter.event_queue)
 
-        # --- Rule 3: Drain backlog at full ceiling when system is healthy ---
-        # Only enter Draining if backlog is meaningfully large (> 5 events).
-        # This filters out the micro-fluctuations from the sawtooth pattern where
-        # stream_backlog briefly reads > 0 mid-tick before processing runs.
-        elif self.stream_backlog > 5:
-            target = ceiling
-            state = "Draining"
-            reason = "Clearing backlog - processing at full operator limit"
-
-        # --- Rule 4: Nominal - no backlog, no retrain ---
-        else:
-            target = ceiling
-            state = "Nominal"
-            reason = "Incoming traffic is within the configured limit"
-
-        # Smooth transition toward target (faster drop, slower ramp-up)
-        step_ratio = 0.45 if target < self.applied_rate_limit else 0.25
-        max_step = max(0.5, ceiling * step_ratio * max(elapsed, 0.25))
-        delta = float(np.clip(target - self.applied_rate_limit, -max_step, max_step))
-        self.applied_rate_limit = float(np.clip(self.applied_rate_limit + delta, 1.0, ceiling))
-
-        if self.stream_rate > self.applied_rate_limit:
-            if state in {"Nominal", "Draining"}:
-                # Draining = catching up on a shrinking backlog
-                # Throttling = backlog is actively growing because incoming > limit
-                state = "Throttling"
-                reason = "Sensor data arrival rate exceeds processing capacity - readings are queuing"
-            elif state == "Nominal":
-                reason = "Sensor data arrival rate is above the current adaptive processing limit"
-
-        previous_state = self.rate_control_state
-        self.rate_control_state = state
-        self.rate_control_reason = reason
-
-        should_audit = (
-            state in {"Throttling", "Protecting"}
-            and (
-                previous_state != state
-                or self.sample_index - self.last_rate_control_audit_sample >= 30
-            )
-            and (
-                # For Protecting (pre-emptive drift throttle), only log when backlog
-                # has actual queue pressure; avoids noise on a healthy stable stream.
-                state == "Throttling" or self.stream_backlog > 5
-            )
-            and self.stream_backlog < STREAM_QUEUE_MAXLEN
+        applied = self.rate_limiter.update(
+            elapsed=elapsed,
+            stream_rate=self.stream_rate,
+            latest_drift=latest_drift,
+            is_retraining=is_retraining,
+            sample_index=self.sample_index,
+            audit=self.audit,
         )
-        if should_audit:
-            self.last_rate_control_audit_sample = self.sample_index
-            self.action_reasons["Rate control"] += 1
-            timeline_msg = (
-                "Sensor ingestion throttled - queue depth increasing"
-                if state == "Throttling"
-                else "Ingestion rate reduced - model refresh underway"
-            )
-            self.audit.append_timeline(timeline_msg, "Warning")
-            self.audit.append_audit(
-                "Ingestion Rate Adjusted",
-                reason,
-                f"Processing limit: {self.applied_rate_limit:.1f} eps | Backlog depth: {int(self.stream_backlog)} readings",
-                "Warning",
-                "RATE_LIMIT",
-            )
 
-        return self.applied_rate_limit
+        # Sync rate-control audit counter
+        if self.rate_limiter.state in {"Throttling", "Protecting"}:
+            prev_sample = self.rate_limiter._last_audit_sample
+            if prev_sample == self.sample_index:  # audit was just written this tick
+                self.action_reasons["Rate control"] += 1
+
+        return applied
 
     # -----------------------------------------------------------------------
     # Retraining pipeline: performance gate -> shadow evaluation
@@ -716,37 +592,23 @@ class StreamingMLRuntime:
         return {"data": data, "scenario_active": scenario_active}
 
     def _enqueue_stream_event(self):
-        if len(self.event_queue) >= STREAM_QUEUE_MAXLEN:
-            self.event_queue.popleft()
-            self.load_shedding_total += 1
-            self.load_shedding_events_since_snapshot += 1
-            self.last_load_shedding_at = time.monotonic()
+        """Delegate queue management and load-shedding to rate_limiting/controller.py."""
+        prev_shed = self.rate_limiter.load_shedding_total
+        self.rate_limiter.enqueue(self._create_stream_event(), self.sample_index, self.audit)
+        if self.rate_limiter.load_shedding_total > prev_shed:
             self.action_reasons["Load Shedding (Stale Data)"] += 1
-            if (
-                self.load_shedding_total == 1
-                or self.load_shedding_total - self.last_load_shedding_audit_total >= 100
-            ):
-                self.last_load_shedding_audit_total = self.load_shedding_total
-                self.audit.append_audit(
-                    "Sensor Data Loss - Queue Overflow",
-                    "Ingestion buffer at capacity - oldest unprocessed sensor readings are being discarded to prevent backlog growth",
-                    f"Total readings dropped this session: {self.load_shedding_total} | Immediate operator review recommended",
-                    "Critical",
-                    "RATE_LIMIT",
-                )
-        self.event_queue.append(self._create_stream_event())
-        self.stream_backlog = len(self.event_queue)
+        self.stream_backlog = len(self.rate_limiter.event_queue)
 
     def _warm_up_stream(self):
         for _ in range(INITIAL_STREAM_WARMUP_SAMPLES):
             self._enqueue_stream_event()
         self.current_incoming_rate = self.stream_rate
-        self.current_processed_rate = min(self.stream_rate, self.applied_rate_limit)
+        self.current_processed_rate = min(self.stream_rate, self.rate_limiter.applied_rate_limit)
         started = time.perf_counter()
         processed = 0
         warmup_events = [
-            self.event_queue.popleft()
-            for _ in range(min(INITIAL_STREAM_WARMUP_SAMPLES, len(self.event_queue)))
+            self.rate_limiter.event_queue.popleft()
+            for _ in range(min(INITIAL_STREAM_WARMUP_SAMPLES, len(self.rate_limiter.event_queue)))
         ]
         try:
             predictions = self._predict_batch_with_confidence(warmup_events)
@@ -754,13 +616,13 @@ class StreamingMLRuntime:
             predictions = [None] * len(warmup_events)
         anomaly_results = self._detect_anomalies_batch(warmup_events)
         for event, prediction, anomaly_result in zip(warmup_events, predictions, anomaly_results):
-            self.stream_backlog = len(self.event_queue)
+            self.stream_backlog = len(self.rate_limiter.event_queue)
             self._process_one(event, prediction, anomaly_result)
             processed += 1
         elapsed = time.perf_counter() - started
         if processed > 0 and elapsed > 0:
             measured_capacity = processed / elapsed
-            self.worker_capacity_limit = float(np.clip(measured_capacity * 0.92, 1.0, 40.0))
+            self.rate_limiter.worker_capacity_limit = float(np.clip(measured_capacity * 0.92, 1.0, 40.0))
 
     def _process_one(self, event, prediction=None, anomaly_result=None):
         data = event["data"]
@@ -894,9 +756,9 @@ class StreamingMLRuntime:
         )
 
         # --- Confidence and status ---
-        confidence = self._confidence_value(pred_std, error)
+        confidence = confidence_value(pred_std, error)
         self.confidences.append(confidence)
-        status = self._status_from_metrics(drift_score, rolling_avg, action)
+        status = status_from_metrics(drift_score, rolling_avg, action)
 
         # Update system state
         if not self.shadow_evaluator.is_evaluating:
@@ -988,12 +850,12 @@ class StreamingMLRuntime:
             "dataRate": round(self.current_incoming_rate, 1),
             "incomingRate": round(self.current_incoming_rate, 1),
             "processedRate": round(self.current_processed_rate, 1),
-            "appliedRateLimit": round(self.applied_rate_limit, 1),
-            "configuredRateLimit": round(self.rate_limit, 1),
+            "appliedRateLimit": round(self.rate_limiter.applied_rate_limit, 1),
+            "configuredRateLimit": round(self.rate_limiter.rate_limit, 1),
             "throttledRate": round(
                 max(0.0, self.current_incoming_rate - self.current_processed_rate), 1
             ),
-            "rateControlState": self.rate_control_state,
+            "rateControlState": self.rate_limiter.state,
             "latency": latency,
             "driftScore": round(drift_score, 3),
             "confidence": confidence,
@@ -1067,12 +929,12 @@ class StreamingMLRuntime:
         )
         process_due = min(
             int(self.processing_carry),
-            len(self.event_queue),
+            len(self.rate_limiter.event_queue),
             MAX_EVENTS_PER_WORKER_TICK,
         )
         self.processing_carry -= process_due
 
-        batch = [self.event_queue.popleft() for _ in range(process_due)]
+        batch = [self.rate_limiter.event_queue.popleft() for _ in range(process_due)]
         try:
             predictions = self._predict_batch_with_confidence(batch)
         except Exception:
@@ -1080,12 +942,12 @@ class StreamingMLRuntime:
         anomaly_results = self._detect_anomalies_batch(batch)
 
         for event, prediction, anomaly_result in zip(batch, predictions, anomaly_results):
-            self.stream_backlog = len(self.event_queue)
+            self.stream_backlog = len(self.rate_limiter.event_queue)
             self._process_one(event, prediction, anomaly_result)
 
         self.incoming_events_since_snapshot += incoming_events
         self.processed_events_since_snapshot += process_due
-        self.stream_backlog = len(self.event_queue)
+        self.stream_backlog = len(self.rate_limiter.event_queue)
         self.last_advance = now
 
         if now - self.last_snapshot_at >= DASHBOARD_SNAPSHOT_SECONDS:
@@ -1109,12 +971,12 @@ class StreamingMLRuntime:
                 "dataRate": round(self.current_incoming_rate, 1),
                 "incomingRate": round(self.current_incoming_rate, 1),
                 "processedRate": round(self.current_processed_rate, 1),
-                "appliedRateLimit": round(self.applied_rate_limit, 1),
-                "configuredRateLimit": round(self.rate_limit, 1),
+                "appliedRateLimit": round(self.rate_limiter.applied_rate_limit, 1),
+                "configuredRateLimit": round(self.rate_limiter.rate_limit, 1),
                 "throttledRate": round(
                     max(0.0, self.current_incoming_rate - self.current_processed_rate), 1
                 ),
-                "rateControlState": self.rate_control_state,
+                "rateControlState": self.rate_limiter.state,
                 "streamBacklog": int(self.stream_backlog),
             }
             self.latest_point = point
@@ -1124,7 +986,7 @@ class StreamingMLRuntime:
         with self.snapshot_lock:
             self.dashboard_snapshot = snapshot
         if update_rates:
-            self.load_shedding_events_since_snapshot = 0
+            self.rate_limiter.reset_snapshot_counters()
 
     def _build_dashboard_response(self):
         latest = self.latest_point or (self.series[-1] if self.series else {})
@@ -1148,9 +1010,9 @@ class StreamingMLRuntime:
 
         # Compute overall system status considering both ML health and infrastructure state
         ml_status = latest.get("status", "Healthy")
-        if self.stream_backlog >= STREAM_QUEUE_MAXLEN or self.load_shedding_events_since_snapshot > 0:
+        if self.stream_backlog >= STREAM_QUEUE_MAXLEN or self.rate_limiter.load_shedding_events_since_snapshot > 0:
             system_status = "Critical"
-        elif self.rate_control_state == "Throttling":
+        elif self.rate_limiter.state == "Throttling":
             system_status = "Critical" if ml_status == "Critical" else "Warning"
         else:
             system_status = ml_status
@@ -1199,13 +1061,13 @@ class StreamingMLRuntime:
                 "alerts": self.audit.get_alerts(),
             },
             "rateControl": {
-                "rateLimitEnabled": self.rate_limit_enabled,
-                "rateLimit": round(self.rate_limit, 1),
+                "rateLimitEnabled": self.rate_limiter.rate_limit_enabled,
+                "rateLimit": round(self.rate_limiter.rate_limit, 1),
                 "simulatedRate": round(self.stream_rate, 1),
                 "incomingRate": round(self.current_incoming_rate, 1),
                 "currentRate": round(self.current_processed_rate, 1),
                 "processedRate": round(self.current_processed_rate, 1),
-                "appliedRateLimit": round(self.applied_rate_limit, 1),
+                "appliedRateLimit": round(self.rate_limiter.applied_rate_limit, 1),
                 "throttledRate": round(
                     max(0.0, self.current_incoming_rate - self.current_processed_rate),
                     1,
@@ -1213,17 +1075,17 @@ class StreamingMLRuntime:
                 "streamBacklog": int(self.stream_backlog),
                 "queueCapacity": STREAM_QUEUE_MAXLEN,
                 "loadSheddingActive": (
-                    self.load_shedding_events_since_snapshot > 0
+                    self.rate_limiter.load_shedding_events_since_snapshot > 0
                     or (
-                        self.last_load_shedding_at is not None
-                        and time.monotonic() - self.last_load_shedding_at <= 4.0
+                        self.rate_limiter.last_load_shedding_at is not None
+                        and time.monotonic() - self.rate_limiter.last_load_shedding_at <= 4.0
                     )
                 ),
-                "loadSheddingTotal": int(self.load_shedding_total),
-                "loadSheddingRecent": int(self.load_shedding_events_since_snapshot),
-                "workerCapacity": round(self.worker_capacity_limit, 1),
-                "controllerState": self.rate_control_state,
-                "controllerReason": self.rate_control_reason,
+                "loadSheddingTotal": int(self.rate_limiter.load_shedding_total),
+                "loadSheddingRecent": int(self.rate_limiter.load_shedding_events_since_snapshot),
+                "workerCapacity": round(self.rate_limiter.worker_capacity_limit, 1),
+                "controllerState": self.rate_limiter.state,
+                "controllerReason": self.rate_limiter.reason,
                 "overloadRisk": int(
                     np.clip(
                         max(self.stream_backlog / 90.0, latest.get("latency", 45) / 260.0)
@@ -1252,8 +1114,8 @@ class StreamingMLRuntime:
                         "sampleIndex": p.get("sampleIndex", 0),
                         "incomingRate": p.get("incomingRate", p["dataRate"]),
                         "actualRate": p.get("processedRate", p["dataRate"]),
-                        "appliedRateLimit": p.get("appliedRateLimit", round(self.applied_rate_limit, 1)),
-                        "rateLimit": p.get("configuredRateLimit", round(self.rate_limit, 1)),
+                        "appliedRateLimit": p.get("appliedRateLimit", round(self.rate_limiter.applied_rate_limit, 1)),
+                        "rateLimit": p.get("configuredRateLimit", round(self.rate_limiter.rate_limit, 1)),
                     }
                     for p in series
                 ],
@@ -1314,29 +1176,27 @@ class StreamingMLRuntime:
         with self.lock:
             if request.simulatedRate is not None:
                 self.stream_rate = float(request.simulatedRate)
-            if request.rateLimit is not None:
-                self.rate_limit = float(request.rateLimit)
-            if request.rateLimitEnabled is not None:
-                self.rate_limit_enabled = bool(request.rateLimitEnabled)
-            if self.rate_limit_enabled:
-                self.applied_rate_limit = min(self.applied_rate_limit, self.rate_limit)
-            else:
-                self.applied_rate_limit = self.worker_capacity_limit
-                self.rate_control_state = "Bypassed"
-                self.rate_control_reason = "Rate limiting is disabled (ML worker capacity)"
+            self.rate_limiter.apply_controls(
+                rate_limit=request.rateLimit,
+                rate_limit_enabled=request.rateLimitEnabled,
+            )
             rate_control_patch = {
-                "rateLimitEnabled": self.rate_limit_enabled,
-                "rateLimit": round(self.rate_limit, 1),
+                "rateLimitEnabled": self.rate_limiter.rate_limit_enabled,
+                "rateLimit": round(self.rate_limiter.rate_limit, 1),
                 "simulatedRate": round(self.stream_rate, 1),
-                "appliedRateLimit": round(self.applied_rate_limit, 1),
-                "controllerState": self.rate_control_state,
-                "controllerReason": self.rate_control_reason,
+                "appliedRateLimit": round(self.rate_limiter.applied_rate_limit, 1),
+                "controllerState": self.rate_limiter.state,
+                "controllerReason": self.rate_limiter.reason,
             }
-            current_key = (round(self.stream_rate, 1), round(self.rate_limit, 1), self.rate_limit_enabled)
+            current_key = (round(self.stream_rate, 1), round(self.rate_limiter.rate_limit, 1), self.rate_limiter.rate_limit_enabled)
             if current_key != self._last_controls_audit:
                 self._last_controls_audit = current_key
-                ceiling_str = f"{self.rate_limit:.1f} eps" if self.rate_limit_enabled else f"{self.worker_capacity_limit:.1f} eps (hardware limit)"
-                status_str = "Enabled" if self.rate_limit_enabled else "Disabled"
+                ceiling_str = (
+                    f"{self.rate_limiter.rate_limit:.1f} eps"
+                    if self.rate_limiter.rate_limit_enabled
+                    else f"{self.rate_limiter.worker_capacity_limit:.1f} eps (hardware limit)"
+                )
+                status_str = "Enabled" if self.rate_limiter.rate_limit_enabled else "Disabled"
                 self.audit.append_audit(
                     "Ingestion Policy Updated",
                     "Operator modified sensor stream processing controls",
