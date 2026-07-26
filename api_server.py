@@ -391,10 +391,9 @@ class StreamingMLRuntime:
             audit=self.audit,
         )
 
-        # Sync rate-control audit counter
         if self.rate_limiter.state in {"Throttling", "Protecting"}:
             prev_sample = self.rate_limiter._last_audit_sample
-            if prev_sample == self.sample_index:  # audit was just written this tick
+            if prev_sample == self.sample_index:
                 self.action_reasons["Rate control"] += 1
 
         return applied
@@ -592,7 +591,6 @@ class StreamingMLRuntime:
         return {"data": data, "scenario_active": scenario_active}
 
     def _enqueue_stream_event(self):
-        """Delegate queue management and load-shedding to rate_limiting/controller.py."""
         prev_shed = self.rate_limiter.load_shedding_total
         self.rate_limiter.enqueue(self._create_stream_event(), self.sample_index, self.audit)
         if self.rate_limiter.load_shedding_total > prev_shed:
@@ -705,16 +703,13 @@ class StreamingMLRuntime:
                     "Healthy",
                     "MODEL",
                 )
-                # Refit anomaly detector on current buffer so it stays aligned
-                # with the new data distribution (issue #4 fix)
                 try:
                     if len(self.buffer) >= 30:
                         buffer_df = pd.DataFrame(list(self.buffer))
                         self.anomaly_detector.fit(buffer_df)
                 except Exception:
-                    pass  # Never crash model promotion due to anomaly detector refit
+                    pass
             elif prod_mae is not None:
-                # Window complete but shadow was not better; production remains active.
                 self.shadow_evaluator.stop_evaluation()
                 self.system_state = "Monitoring"
                 self.last_action = "Candidate model evaluation complete - production model retained"

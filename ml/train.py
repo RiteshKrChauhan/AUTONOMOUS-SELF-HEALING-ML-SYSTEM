@@ -1,5 +1,5 @@
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import GroupShuffleSplit, train_test_split
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error
 
@@ -15,45 +15,6 @@ def _fit_model_from_xy(X_train, y_train):
         n_jobs=1,
     )
     model.fit(X_train_scaled, y_train)
-    return model, scaler
-
-
-def train_model(df, return_mae=False):
-    """
-    Train a Random Forest with group-aware train/test split.
-    Groups are engine units to avoid cycle leakage.
-    """
-    df = df.dropna()
-    X = df.drop(columns=["RUL", "unit", "cycle"])
-    y = df["RUL"]
-    groups = df["unit"]
-
-    def _fit_on_all(reason):
-        print(f"  Falling back to full fit: {reason}")
-        m, s = _fit_model_from_xy(X, y)
-        if return_mae:
-            return m, s, None
-        return m, s
-
-    if len(X) < 10 or groups.nunique() < 2:
-        return _fit_on_all("too few samples or groups")
-
-    splitter = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-    try:
-        train_idx, test_idx = next(splitter.split(X, y, groups=groups))
-    except ValueError:
-        return _fit_on_all("group split failed")
-
-    X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-    y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-
-    model, scaler = _fit_model_from_xy(X_train, y_train)
-    y_pred = model.predict(scaler.transform(X_test))
-    mae = mean_absolute_error(y_test, y_pred)
-    print(f"  train_model | MAE: {mae:.2f} | train rows: {len(X_train)} | test rows: {len(X_test)}")
-
-    if return_mae:
-        return model, scaler, float(mae)
     return model, scaler
 
 

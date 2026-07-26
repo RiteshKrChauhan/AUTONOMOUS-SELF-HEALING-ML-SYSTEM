@@ -9,11 +9,6 @@ class AnomalyDetector:
     """
     
     def __init__(self, contamination=0.05, random_state=42):
-        """
-        Args:
-            contamination: Expected proportion of outliers (0.05 = 5%)
-            random_state: Random seed for reproducibility
-        """
         self.contamination = contamination
         self.random_state = random_state
         self.detector = None
@@ -64,16 +59,4 @@ class AnomalyDetector:
         except Exception:
             return False, 0.0
 
-    
-    def get_decision_function(self, data_point):
-        """Get raw anomaly score (for logging/debugging)"""
-        if not self.is_fitted:
-            return None
-        
-        try:
-            import pandas as pd
-            row = {f: [data_point.get(f, 0.0)] for f in self.feature_names}
-            features_df = pd.DataFrame(row, columns=self.feature_names)
-            return float(self.detector.decision_function(features_df)[0])
-        except Exception:
-            return None
+

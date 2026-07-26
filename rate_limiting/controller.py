@@ -27,19 +27,7 @@ STREAM_QUEUE_MAXLEN = 500
 
 
 class RateLimitController:
-    """
-    Adaptive ingestion-rate controller for the streaming ML runtime.
-
-    The controller is intentionally stateful: each call to
-    ``update(elapsed)`` advances the internal smoothed rate and returns
-    the current applied limit so the caller can decide how many events
-    to process in the current tick.
-
-    Typical usage (inside a locked tick)::
-
-        applied = controller.update(elapsed)
-        process_count = min(int(processing_carry + elapsed * applied), len(queue))
-    """
+    """Adaptive ingestion-rate controller for the streaming ML runtime."""
 
     def __init__(self, rate_limit: float = 14.0, worker_capacity_limit: float = 40.0):
         # Operator-configured ceiling (eps)
@@ -65,10 +53,6 @@ class RateLimitController:
         # Inbound event queue
         self.event_queue: deque = deque(maxlen=STREAM_QUEUE_MAXLEN)
         self.stream_backlog: int = 0
-
-        # Carry accumulators for fractional event counts
-        self.arrival_carry: float = 0.0
-        self.processing_carry: float = 0.0
 
         # Last sample index at which a rate-control audit was written
         self._last_audit_sample: int = -1000
