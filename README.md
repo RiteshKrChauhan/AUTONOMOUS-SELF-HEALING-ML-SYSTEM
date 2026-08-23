@@ -132,7 +132,7 @@ This system trains a **Random Forest regressor** on the NASA CMAPSS turbofan eng
 - Vanilla CSS
 
 **Testing**
-- pytest with 74 tests across all modules
+- pytest with 108 tests across all modules
 
 ---
 
@@ -154,8 +154,9 @@ AUTONOMOUS-SELF-HEALING-ML-SYSTEM/
 │   └── error_monitor.py        # Rolling MAE window + trend detection
 │
 ├── ml/
-│   ├── train.py                # train_model_with_holdout (unit-based split)
+│   ├── train.py                # train_model_with_holdout (unit-based split, configurable seed)
 │   ├── predict.py              # Single-point inference helper
+│   ├── evaluation.py           # split_training_and_validation (disjoint unit/temporal split)
 │   ├── confidence_predictor.py # RF tree variance → confidence intervals
 │   ├── performance_gate.py     # Accept/reject candidate model by MAE delta
 │   └── shadow_evaluator.py     # A/B shadow evaluation before promotion
@@ -172,13 +173,21 @@ AUTONOMOUS-SELF-HEALING-ML-SYSTEM/
 ├── scenarios/
 │   ├── registry.py             # Central scenario registry
 │   ├── gradual_drift.py        # Progressive sensor wear (+0.3σ / 10 cycles)
-│   ├── sudden_spike.py         # Instant ±8σ spike on 3 sensors
-│   ├── high_noise.py           # 3× baseline noise injection
-│   ├── sensor_failure.py       # Flat-line failure on sensor_7 and sensor_11
+│   ├── sudden_spike.py         # Instant +8σ spike on all 21 sensors
+│   ├── high_noise.py           # ±4.5σ zero-mean noise injection
+│   ├── sensor_failure.py       # Flat-line failure on sensor_3 and sensor_9
 │   ├── concept_drift.py        # RUL label shift (−60 cycles, features stable)
 │   ├── correlated_drift.py     # Correlated shift across sensor pairs
 │   ├── intermittent_spikes.py  # ±12σ spikes every 7th cycle
 │   └── drift_recovery.py       # Drift then gradual recovery
+│
+├── experiments/                # Standalone research experiment framework
+│   ├── config.py               # ExperimentConfig (frozen dataclass, validated)
+│   ├── data_stream.py          # Deterministic event generator (research / legacy mode)
+│   ├── baselines.py            # 4 experiment strategies (static, scheduled, naive, proposed)
+│   ├── metrics.py              # RunSummary + summarize_events()
+│   ├── runner.py               # CLI entry point
+│   └── results/                # Per-run CSVs and JSON summaries
 │
 ├── dataset/
 │   ├── raw/
@@ -186,7 +195,7 @@ AUTONOMOUS-SELF-HEALING-ML-SYSTEM/
 │   └── processed/
 │       └── preprocess_module.py
 │
-├── tests/                      # pytest suite (74 tests)
+├── tests/                      # pytest suite (108 tests)
 │   ├── test_decision_engine.py
 │   ├── test_adaptive_cooldown.py
 │   ├── test_adwin_detector.py
@@ -201,7 +210,14 @@ AUTONOMOUS-SELF-HEALING-ML-SYSTEM/
 │   ├── test_preprocess.py
 │   ├── test_rate_limiting.py
 │   ├── test_scenarios.py
-│   └── test_train.py
+│   ├── test_train.py
+│   ├── test_common_validation.py
+│   ├── test_experiment_config.py
+│   ├── test_experiment_metrics.py
+│   ├── test_experiment_strategies.py
+│   ├── test_experiment_stream.py
+│   ├── test_scenario_logic.py
+│   └── test_validation_quality.py
 │
 ├── frontend/                   # React + Vite dashboard
 │   └── src/
@@ -315,9 +331,9 @@ Scenarios are injected via `POST /api/anomalies` and run for a fixed number of c
 | Scenario ID | Name | Severity | Duration | What It Does |
 |---|---|---|---|---|
 | `gradual_drift` | Gradual Sensor Drift | Medium | 100 cycles | Four key sensors drift by +0.3σ every 10 cycles — simulates progressive component wear |
-| `sudden_spike` | Sudden Sensor Drift | Critical | 45 cycles | All 21 sensors shift by +8σ immediately — simulates a severe environmental or mechanical fault |
-| `high_noise` | High Sensor Noise | Medium | 60 cycles | Sensor variance increases 5× with no mean shift — simulates electrical interference |
-| `sensor_failure` | Stuck Sensor Failure | High | 80 cycles | Two sensors lock to 0.0 — simulates disconnected or grounded hardware |
+| `sudden_spike` | Sudden Sensor Drift | Critical | 80 cycles | All 21 sensors shift by +8σ immediately — simulates a severe environmental or mechanical fault |
+| `high_noise` | High Sensor Noise | Medium | 60 cycles | All sensors receive ±4.5σ zero-mean noise — simulates electrical interference |
+| `sensor_failure` | Stuck Sensor Failure | High | 80 cycles | sensor_3 and sensor_9 lock to 0.0 — simulates disconnected or grounded hardware |
 | `concept_drift` | Concept Drift | High | 150 cycles | RUL labels shift −60 cycles while sensor features remain within normal ranges |
 | `correlated_drift` | Correlated Sensor Drift | High | 60 cycles | Six temperature and pressure sensors drift by +3σ together — simulates a thermal event |
 | `intermittent_spikes` | Intermittent Sensor Spikes | Low | 90 cycles | Two random sensors spike by ±12σ every 7th cycle — normal readings between spikes |
@@ -341,7 +357,7 @@ Scenarios are injected via `POST /api/anomalies` and run for a fixed number of c
 
 ## Test Suite
 
-Run all 74 tests with:
+Run all 108 tests with:
 
 ```bash
 python -m pytest tests/ -v
@@ -363,7 +379,14 @@ python -m pytest tests/ -v
 | `test_preprocess.py` | 3 | RUL computation, whitespace-delimited parsing, bad-column error |
 | `test_rate_limiting.py` | 6 | Enqueue, load shedding at capacity, update return, bypass mode, controls, snapshot reset |
 | `test_scenarios.py` | 5 | Registry completeness, META fields, apply() mutation, zero-cycle safety |
+| `test_scenario_logic.py` | 5 | Per-scenario detectability assertions (KS, ADWIN, IsolationForest) |
 | `test_train.py` | 4 | Normal training, insufficient-data guard, single-unit fallback, model inference |
+| `test_common_validation.py` | 5 | Disjoint train/val split, no leakage, common validation set integrity |
+| `test_experiment_config.py` | 3 | Config validation, output directory creation, path types |
+| `test_experiment_metrics.py` | 6 | Metric definitions, validation-skip counting, gate-reject separation, recovery metrics |
+| `test_experiment_strategies.py` | 1 | Static strategy never retrains |
+| `test_experiment_stream.py` | 3 | Research-mode ordering, seeded legacy mode, fault-injection determinism |
+| `test_validation_quality.py` | 11 | Buffer/validation-quality policy, configurable RF seed, config field validation |
 
 ---
 
@@ -382,10 +405,11 @@ Two independent detectors run on every processed event:
 When both drift detectors agree and the rolling MAE exceeds threshold, the cooldown timer elapses, and the system:
 
 1. **Spawns a background retrain thread** on a snapshot of the recent buffer (≥55 events).
-2. Trains a candidate model via `train_model_with_holdout` with a unit-based train/validation split.
-3. Passes the candidate through the **Performance Gate** — it must achieve ≥5% lower MAE than production on held-out data.
-4. Starts **Shadow Evaluation** — the candidate runs in parallel with production for 20 live cycles.
-5. If shadow MAE < production MAE × 0.95 after 20 cycles, the candidate is **promoted** and the Isolation Forest is refitted.
+2. Validates that the buffer meets the **candidate validation-quality policy** — the disjoint validation set must have at least `minimum_validation_rows` rows and `minimum_validation_units` distinct engine units. If not met, the trigger is recorded as skipped and monitoring continues.
+3. Trains a candidate model via `train_model_with_holdout` with a unit-based train/validation split and the experiment's configured random seed.
+4. Passes the candidate through the **Performance Gate** — it must achieve ≥5% lower MAE than production on held-out data.
+5. Starts **Shadow Evaluation** — the candidate runs in parallel with production for 20 live cycles.
+6. If shadow MAE < production MAE × 0.95 after 20 cycles, the candidate is **promoted** and the Isolation Forest is refitted.
 
 ### Rate Limiting
 
