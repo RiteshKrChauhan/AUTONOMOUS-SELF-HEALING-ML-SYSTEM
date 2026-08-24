@@ -127,20 +127,32 @@ class ExperimentStrategy:
 
     def _train_candidate(
         self,
-    ) -> tuple[object | None, object | None, pd.DataFrame, float, str | None]:
+    ) -> tuple[object | None, object | None, pd.DataFrame, float, str | None, dict]:
         """Attempt to train a candidate model from the current buffer.
 
         Returns:
-            (model, scaler, validation_df, training_time, skip_reason)
+            (model, scaler, validation_df, training_time, skip_reason, validation_log)
 
             If validation-quality requirements are not met, model and scaler
             are None, validation_df is empty, and skip_reason is a non-None
             string describing why training was skipped.  The caller must record
             this reason without generating a candidate or running the gate.
+            
+            validation_log contains detailed metrics about buffer composition,
+            train/validation split, and unit disjointness verification.
         """
+        validation_log = {}
         buffer_df = pd.DataFrame(list(self.buffer))
+        
+        # Log buffer composition
+        validation_log["buffer_rows"] = len(buffer_df)
+        validation_log["buffer_units"] = (
+            int(buffer_df["unit"].nunique()) if "unit" in buffer_df.columns else 0
+        )
+        
         if len(buffer_df) < self.config.minimum_retraining_samples:
-            return None, None, pd.DataFrame(), 0.0, "insufficient_buffer"
+            validation_log["skip_reason"] = "insufficient_buffer"
+            return None, None, pd.DataFrame(), 0.0, "insufficient_buffer", validation_log
 
         buffer_df = buffer_df[[c for c in self.expected_columns if c in buffer_df.columns]]
         train_df, validation_df = split_training_and_validation(
@@ -150,27 +162,53 @@ class ExperimentStrategy:
             min_validation_rows=self.config.minimum_validation_rows,
         )
 
-        n_val_rows = len(validation_df)
-        n_val_units = (
-            int(validation_df["unit"].nunique())
-            if "unit" in validation_df.columns
-            else 0
+        # Log train/validation split details
+        validation_log["train_rows"] = len(train_df)
+        validation_log["validation_rows"] = len(validation_df)
+        validation_log["train_units"] = (
+            int(train_df["unit"].nunique()) if "unit" in train_df.columns else 0
         )
+        validation_log["validation_units"] = (
+            int(validation_df["unit"].nunique()) if "unit" in validation_df.columns else 0
+        )
+        
+        # Verify unit disjointness
+        if "unit" in train_df.columns and "unit" in validation_df.columns:
+            train_units = set(train_df["unit"].unique())
+            val_units = set(validation_df["unit"].unique())
+            intersection = train_units & val_units
+            validation_log["unit_disjoint"] = len(intersection) == 0
+            validation_log["unit_intersection_count"] = len(intersection)
+            if intersection:
+                validation_log["unit_intersection"] = sorted(int(u) for u in intersection)
+        else:
+            validation_log["unit_disjoint"] = None
+            validation_log["unit_intersection_count"] = 0
+        
+        n_val_rows = len(validation_df)
+        n_val_units = validation_log["validation_units"]
+        
         if n_val_rows < self.config.minimum_validation_rows:
+            skip_reason = f"validation_too_small:{n_val_rows}_rows"
+            validation_log["skip_reason"] = skip_reason
             return (
                 None,
                 None,
                 pd.DataFrame(),
                 0.0,
-                f"validation_too_small:{n_val_rows}_rows",
+                skip_reason,
+                validation_log,
             )
         if n_val_units < self.config.minimum_validation_units:
+            skip_reason = f"validation_too_few_units:{n_val_units}_units"
+            validation_log["skip_reason"] = skip_reason
             return (
                 None,
                 None,
                 pd.DataFrame(),
                 0.0,
-                f"validation_too_few_units:{n_val_units}_units",
+                skip_reason,
+                validation_log,
             )
 
         started = time.perf_counter()
@@ -178,7 +216,8 @@ class ExperimentStrategy:
             train_df, min_retrain_rows=30, random_state=self.config.seed
         )
         elapsed = time.perf_counter() - started
-        return model, scaler, validation_df, elapsed, None
+        validation_log["training_time"] = elapsed
+        return model, scaler, validation_df, elapsed, None, validation_log
 
     def _replace_model(self, model, scaler) -> None:
         self.model = model
@@ -288,6 +327,16 @@ class ExperimentStrategy:
             "training_time": 0.0,
             "shadow_evaluation_time": 0.0,
             "inference_latency": inference_latency,
+            # --- Validation logging fields (populated during retraining) ---
+            "val_buffer_rows": None,
+            "val_train_rows": None,
+            "val_validation_rows": None,
+            "val_buffer_units": None,
+            "val_train_units": None,
+            "val_validation_units": None,
+            "val_unit_disjoint": None,
+            "val_unit_intersection_count": None,
+            "val_training_time": None,
         }
 
     def _rolling_rmse(self) -> float | None:
@@ -318,9 +367,14 @@ class ScheduledStrategy(ExperimentStrategy):
     def _train_and_replace(self, row, gated: bool) -> None:
         row["retraining_triggered"] = True
         row["retraining_started"] = True
-        model, scaler, _, training_time, skip_reason = self._train_candidate()
+        model, scaler, _, training_time, skip_reason, val_log = self._train_candidate()
         row["training_time"] = training_time
         row["retraining_completed"] = True
+        
+        # Add validation logging
+        for key, value in val_log.items():
+            row[f"val_{key}"] = value
+        
         if skip_reason is not None:
             row["validation_skipped"] = True
             row["validation_skip_reason"] = skip_reason
@@ -361,9 +415,13 @@ class ProposedStrategy(ExperimentStrategy):
         self.last_retrain_sample = event.sample_index
         row["retraining_triggered"] = True
         row["retraining_started"] = True
-        model, scaler, validation_df, training_time, skip_reason = self._train_candidate()
+        model, scaler, validation_df, training_time, skip_reason, val_log = self._train_candidate()
         row["training_time"] = training_time
         row["retraining_completed"] = True
+        
+        # Add validation logging
+        for key, value in val_log.items():
+            row[f"val_{key}"] = value
 
         if skip_reason is not None:
             row["validation_skipped"] = True

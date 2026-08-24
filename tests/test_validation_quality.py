@@ -46,7 +46,6 @@ class TestValidationQualityPolicy:
             minimum_retraining_samples=min_buf,
             minimum_validation_rows=min_val_rows,
             minimum_validation_units=min_val_units,
-            scenario_start_index=0,
         )
         train_df = _make_df(n_units=4, cycles_per_unit=30)
         stds = {f"sensor_{i}": 1.0 for i in range(1, 22)}
@@ -56,7 +55,7 @@ class TestValidationQualityPolicy:
         """No candidate should be generated if buffer < minimum_retraining_samples."""
         strategy = self._make_strategy(min_buf=200)
         # Buffer will be empty; train candidate should return skip_reason
-        model, scaler, val_df, _, skip_reason = strategy._train_candidate()
+        model, scaler, val_df, _, skip_reason, val_log = strategy._train_candidate()
         assert model is None
         assert skip_reason == "insufficient_buffer"
 
@@ -71,7 +70,6 @@ class TestValidationQualityPolicy:
             minimum_retraining_samples=80,
             minimum_validation_rows=20,
             minimum_validation_units=2,  # impossible with single-unit buffer
-            scenario_start_index=0,
         )
         train_df = _make_df(n_units=4, cycles_per_unit=30)
         stds = {f"sensor_{i}": 1.0 for i in range(1, 22)}
@@ -82,7 +80,7 @@ class TestValidationQualityPolicy:
         for _, row in one_unit.iterrows():
             strategy.buffer.append(row.to_dict())
 
-        model, scaler, val_df, _, skip_reason = strategy._train_candidate()
+        model, scaler, val_df, _, skip_reason, val_log = strategy._train_candidate()
         assert model is None
         assert skip_reason is not None
         assert "validation_too_few_units" in skip_reason
@@ -93,7 +91,6 @@ class TestValidationQualityPolicy:
             strategy="proposed",
             minimum_retraining_samples=55,
             minimum_validation_rows=20,
-            scenario_start_index=0,
         )
         train_df = _make_df(n_units=4, cycles_per_unit=30)
         stds = {f"sensor_{i}": 1.0 for i in range(1, 22)}
@@ -104,7 +101,7 @@ class TestValidationQualityPolicy:
         for _, row in big_df.iterrows():
             strategy.buffer.append(row.to_dict())
 
-        model, scaler, val_df, _, skip_reason = strategy._train_candidate()
+        model, scaler, val_df, _, skip_reason, val_log = strategy._train_candidate()
         assert skip_reason is None
         assert model is not None
         assert len(val_df) >= 20
@@ -115,7 +112,6 @@ class TestValidationQualityPolicy:
             strategy="proposed",
             minimum_retraining_samples=55,
             minimum_validation_rows=200,  # impossibly high
-            scenario_start_index=0,
         )
         train_df = _make_df(n_units=4, cycles_per_unit=30)
         stds = {f"sensor_{i}": 1.0 for i in range(1, 22)}
