@@ -45,7 +45,8 @@ def run_experiment(config: ExperimentConfig, base_path: Path | None = None) -> d
             scenario_id=config.scenario,
             seed=config.seed,
             stream_length=config.stream_length,
-            scenario_start_index=config.scenario_start_index,
+            scenario_onset_cycle_min=config.scenario_onset_cycle_min,
+            scenario_onset_cycle_max=config.scenario_onset_cycle_max,
         )
     ]
 
@@ -59,7 +60,7 @@ def run_experiment(config: ExperimentConfig, base_path: Path | None = None) -> d
 
     summary = summarize_events(
         rows,
-        config.scenario_start_index,
+        config.scenario_onset_cycle_min,
         recovery_error_threshold=config.retrain_error_threshold,
     )
     payload = {
@@ -76,13 +77,16 @@ def run_experiment(config: ExperimentConfig, base_path: Path | None = None) -> d
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run one self-healing ML experiment")
-    parser.add_argument("--strategy", default="proposed")
-    parser.add_argument("--scenario", default="gradual_drift")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--stream-length", type=int, default=320)
-    parser.add_argument("--stream-mode", default="research", choices=["research", "legacy"])
-    parser.add_argument("--scenario-start-index", type=int, default=80)
-    parser.add_argument("--output-dir", default="experiments/results")
+    # Use ExperimentConfig defaults as single source of truth
+    default_config = ExperimentConfig()
+    parser.add_argument("--strategy", default=default_config.strategy)
+    parser.add_argument("--scenario", default=default_config.scenario)
+    parser.add_argument("--seed", type=int, default=default_config.seed)
+    parser.add_argument("--stream-length", type=int, default=default_config.stream_length)
+    parser.add_argument("--stream-mode", default=default_config.stream_mode, choices=["research", "interleaved", "legacy"])
+    parser.add_argument("--scenario-onset-cycle-min", type=int, default=default_config.scenario_onset_cycle_min)
+    parser.add_argument("--scenario-onset-cycle-max", type=int, default=default_config.scenario_onset_cycle_max)
+    parser.add_argument("--output-dir", default=str(default_config.output_dir))
     return parser.parse_args()
 
 
@@ -94,7 +98,8 @@ def main() -> None:
         scenario=args.scenario,
         stream_length=args.stream_length,
         stream_mode=args.stream_mode,
-        scenario_start_index=args.scenario_start_index,
+        scenario_onset_cycle_min=args.scenario_onset_cycle_min,
+        scenario_onset_cycle_max=args.scenario_onset_cycle_max,
         output_dir=Path(args.output_dir),
     )
     payload = run_experiment(config)

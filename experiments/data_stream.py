@@ -57,19 +57,47 @@ def build_stream_records(
     """Return stream records under a documented ordering policy.
 
     research mode sorts by engine unit and cycle, preserving C-MAPSS temporal
-    trajectories.  legacy mode reproduces the dashboard's historical behavior:
-    individual rows are randomly permuted using the configured seed.
+    trajectories (sequential single-asset monitoring).
+    
+    interleaved mode groups observations by cycle number, sampling all engines
+    round-robin per cycle (fleet monitoring).
+    
+    legacy mode reproduces the dashboard's historical behavior: individual rows
+    are randomly permuted using the configured seed.
     """
 
     if stream_mode == "research":
         ordered = stream_df.sort_values(["unit", "cycle"]).reset_index(drop=True)
         return ordered.to_dict(orient="records")
-    if stream_mode == "legacy":
+    elif stream_mode == "interleaved":
+        return _build_interleaved_stream(stream_df)
+    elif stream_mode == "legacy":
         rng = np.random.default_rng(seed)
         records = stream_df.to_dict(orient="records")
         perm = rng.permutation(len(records)).tolist()
         return [records[i] for i in perm]
-    raise ValueError(f"Unknown stream_mode: {stream_mode}")
+    else:
+        raise ValueError(f"Unknown stream_mode: {stream_mode}")
+
+
+def _build_interleaved_stream(stream_df: pd.DataFrame) -> list[dict]:
+    """Build interleaved fleet stream preserving within-engine cycle order.
+    
+    For each cycle c = 1, 2, 3, ..., max_cycle:
+        Include all engines that have a cycle-c observation, ordered by unit ID.
+    
+    This simulates fleet monitoring where the system receives periodic
+    observations from multiple assets in parallel.
+    """
+    max_cycle = int(stream_df["cycle"].max())
+    records = []
+    
+    for cycle in range(1, max_cycle + 1):
+        cycle_rows = stream_df[stream_df["cycle"] == cycle].copy()
+        cycle_rows = cycle_rows.sort_values("unit")
+        records.extend(cycle_rows.to_dict(orient="records"))
+    
+    return records
 
 
 def baseline_statistics(train_df: pd.DataFrame) -> tuple[dict[str, float], dict[str, float]]:
@@ -84,10 +112,16 @@ def iter_stream_events(
     scenario_id: str,
     seed: int,
     stream_length: int,
-    scenario_start_index: int,
+    scenario_onset_cycle_min: int = 80,
+    scenario_onset_cycle_max: int = 100,
     sensor_noise_fraction: float = 0.015,
 ) -> Iterator[StreamEvent]:
-    """Yield reproducible stream events with deterministic scenario positions."""
+    """Yield reproducible stream events with per-engine scenario lifecycle.
+    
+    Scenarios are applied per-engine based on each engine's lifecycle cycle,
+    not global stream index. Each engine receives a deterministic onset cycle
+    within [onset_cycle_min, onset_cycle_max] based on the experiment seed.
+    """
 
     if not records:
         return
@@ -96,24 +130,41 @@ def iter_stream_events(
     scenario_cls = SCENARIO_REGISTRY[scenario_id]
     duration = int(scenario_cls.META["duration"])
 
+    # Assign deterministic per-engine onset cycles
+    engine_ids = sorted(set(r["unit"] for r in records))
+    engine_onset_map = {}
+    onset_rng = np.random.default_rng(seed + 1000)  # Separate RNG for onsets
+    for engine_id in engine_ids:
+        onset = onset_rng.integers(scenario_onset_cycle_min, scenario_onset_cycle_max + 1)
+        engine_onset_map[engine_id] = onset
+
     for sample_index in range(stream_length):
         row = dict(records[sample_index % len(records)])
         data = dict(row)
+        
+        # Add sensor noise
         for feature in FEATURE_COLUMNS:
             scale = baseline_stds.get(feature, 1.0)
             data[feature] = float(data[feature] + rng.normal(0, sensor_noise_fraction * scale))
 
-        scenario_cycle = sample_index - scenario_start_index
-        scenario_active = 0 <= scenario_cycle < duration
+        # Per-engine scenario application
+        engine_id = int(data["unit"])
+        engine_cycle = int(data["cycle"])
+        engine_onset = engine_onset_map.get(engine_id, scenario_onset_cycle_max + 1)
+        
+        scenario_cycle_for_engine = engine_cycle - engine_onset
+        scenario_active = 0 <= scenario_cycle_for_engine < duration
+        degradation_started = (engine_cycle == engine_onset)
+        
         if scenario_active:
-            scenario_cls.apply(data, scenario_cycle, baseline_stds, rng)
+            scenario_cls.apply(data, scenario_cycle_for_engine, baseline_stds, rng)
 
         yield StreamEvent(
             sample_index=sample_index,
-            engine_id=int(data["unit"]),
-            cycle=int(data["cycle"]),
+            engine_id=engine_id,
+            cycle=engine_cycle,
             data=data,
             scenario_active=scenario_active,
-            scenario_cycle=int(scenario_cycle) if scenario_active else None,
-            degradation_started=sample_index == scenario_start_index,
+            scenario_cycle=int(scenario_cycle_for_engine) if scenario_active else None,
+            degradation_started=degradation_started,
         )
