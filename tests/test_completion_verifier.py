@@ -133,25 +133,76 @@ def create_valid_json(path: Path, json_data: dict):
 class TestParseRunId:
     """Test run_id parsing."""
     
-    def test_valid_run_id(self):
+    def test_valid_run_id_simple(self):
         strategy, scenario, seed = parse_run_id_pattern("static_gradual_drift_seed42")
         assert strategy == "static"
         assert scenario == "gradual_drift"
         assert seed == 42
     
-    def test_valid_run_id_complex(self):
-        strategy, scenario, seed = parse_run_id_pattern("proposed_sudden_shift_seed123")
-        assert strategy == "proposed"
-        assert scenario == "sudden_shift"
+    def test_valid_run_id_scheduled(self):
+        strategy, scenario, seed = parse_run_id_pattern("scheduled_sudden_spike_seed123")
+        assert strategy == "scheduled"
+        assert scenario == "sudden_spike"
         assert seed == 123
     
+    def test_valid_run_id_naive_adaptive(self):
+        """Regression test for naive_adaptive strategy (contains underscore)."""
+        strategy, scenario, seed = parse_run_id_pattern("naive_adaptive_gradual_drift_seed42")
+        assert strategy == "naive_adaptive"
+        assert scenario == "gradual_drift"
+        assert seed == 42
+    
+    def test_valid_run_id_naive_adaptive_concept_drift(self):
+        """Test naive_adaptive with multi-word scenario."""
+        strategy, scenario, seed = parse_run_id_pattern("naive_adaptive_concept_drift_seed456")
+        assert strategy == "naive_adaptive"
+        assert scenario == "concept_drift"
+        assert seed == 456
+    
+    def test_valid_run_id_proposed(self):
+        strategy, scenario, seed = parse_run_id_pattern("proposed_correlated_drift_seed42")
+        assert strategy == "proposed"
+        assert scenario == "correlated_drift"
+        assert seed == 42
+    
+    def test_all_real_strategies(self):
+        """Test all actual strategy names from the research matrix."""
+        test_cases = [
+            ("static_gradual_drift_seed42", "static", "gradual_drift", 42),
+            ("scheduled_sudden_spike_seed123", "scheduled", "sudden_spike", 123),
+            ("naive_adaptive_high_noise_seed456", "naive_adaptive", "high_noise", 456),
+            ("proposed_sensor_failure_seed42", "proposed", "sensor_failure", 42),
+        ]
+        for run_id, exp_strategy, exp_scenario, exp_seed in test_cases:
+            strategy, scenario, seed = parse_run_id_pattern(run_id)
+            assert strategy == exp_strategy, f"Failed for {run_id}"
+            assert scenario == exp_scenario, f"Failed for {run_id}"
+            assert seed == exp_seed, f"Failed for {run_id}"
+    
+    def test_all_real_scenarios(self):
+        """Test all actual scenario names from the research matrix."""
+        scenarios = [
+            "gradual_drift", "sudden_spike", "high_noise", "sensor_failure",
+            "concept_drift", "correlated_drift", "intermittent_spikes", "drift_recovery"
+        ]
+        for scenario in scenarios:
+            run_id = f"naive_adaptive_{scenario}_seed42"
+            strategy, parsed_scenario, seed = parse_run_id_pattern(run_id)
+            assert strategy == "naive_adaptive"
+            assert parsed_scenario == scenario
+            assert seed == 42
+    
     def test_invalid_run_id_format(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="no seed"):
             parse_run_id_pattern("invalid_format")
     
     def test_invalid_run_id_no_seed(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="no seed"):
             parse_run_id_pattern("static_gradual_drift")
+    
+    def test_invalid_run_id_unknown_strategy(self):
+        with pytest.raises(ValueError, match="unknown strategy"):
+            parse_run_id_pattern("unknown_strategy_test_seed42")
 
 
 class TestFindMatchingFiles:
@@ -430,6 +481,7 @@ class TestStatusCrossCheck:
     """Test manifest/status/filesystem cross-checking."""
     
     def test_success_with_missing_output(self):
+        """Execution status=SUCCESS but outputs missing is a mismatch."""
         manifest = [{"run_id": "test_run_seed42", "status": "PLANNED"}]
         status_data = {"test_run_seed42": {"status": "SUCCESS"}}
         
@@ -439,9 +491,10 @@ class TestStatusCrossCheck:
         
         mismatches = cross_check_status(manifest, status_data, validation_results)
         assert len(mismatches) > 0
-        assert any("Status=SUCCESS but outputs missing" in m for m in mismatches)
+        assert any("Execution status=SUCCESS but outputs missing" in m for m in mismatches)
     
     def test_failed_with_valid_output(self):
+        """Execution status=FAILED but valid outputs exist is a mismatch."""
         manifest = [{"run_id": "test_run_seed42", "status": "PLANNED"}]
         status_data = {"test_run_seed42": {"status": "FAILED"}}
         
@@ -450,9 +503,10 @@ class TestStatusCrossCheck:
         
         mismatches = cross_check_status(manifest, status_data, validation_results)
         assert len(mismatches) > 0
-        assert any("Status=FAILED but valid outputs exist" in m for m in mismatches)
+        assert any("Execution status=FAILED but valid outputs exist" in m for m in mismatches)
     
     def test_no_status_entry_with_output(self):
+        """Valid outputs but no execution status entry is a mismatch."""
         manifest = [{"run_id": "test_run_seed42", "status": "PLANNED"}]
         status_data = {}
         
@@ -461,18 +515,23 @@ class TestStatusCrossCheck:
         
         mismatches = cross_check_status(manifest, status_data, validation_results)
         assert len(mismatches) > 0
-        assert any("no status entry" in m for m in mismatches)
+        assert any("no execution status entry" in m for m in mismatches)
     
-    def test_planned_with_existing_output(self):
+    def test_planned_with_existing_output_not_mismatch(self):
+        """Manifest status=PLANNED with existing outputs is NOT a mismatch.
+        
+        The manifest represents the immutable plan created before execution.
+        Actual execution state is tracked in matrix_execution_status.csv.
+        """
         manifest = [{"run_id": "test_run_seed42", "status": "PLANNED"}]
-        status_data = {}
+        status_data = {"test_run_seed42": {"status": "SUCCESS"}}
         
         result = ValidationResult(run_id="test_run_seed42", valid=True)
         validation_results = {"test_run_seed42": result}
         
         mismatches = cross_check_status(manifest, status_data, validation_results)
-        assert len(mismatches) > 0
-        assert any("PLANNED but outputs already exist" in m for m in mismatches)
+        # Should NOT be a mismatch - manifest stays PLANNED, execution status shows SUCCESS
+        assert len(mismatches) == 0
 
 
 class TestIntegration:

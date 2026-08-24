@@ -87,14 +87,29 @@ def parse_run_id_pattern(run_id: str) -> Tuple[str, str, int]:
     """Parse run_id into strategy, scenario, seed.
     
     Example: 'static_gradual_drift_seed42' -> ('static', 'gradual_drift', 42)
-    """
-    pattern = r'^(.+?)_(.+?)_seed(\d+)$'
-    match = re.match(pattern, run_id)
-    if not match:
-        raise ValueError(f"Invalid run_id format: {run_id}")
+    Example: 'naive_adaptive_gradual_drift_seed42' -> ('naive_adaptive', 'gradual_drift', 42)
     
-    strategy, scenario, seed_str = match.groups()
-    return strategy, scenario, int(seed_str)
+    Uses authoritative strategy vocabulary to correctly handle multi-word strategies.
+    """
+    # Authoritative strategy vocabulary
+    KNOWN_STRATEGIES = ['static', 'scheduled', 'naive_adaptive', 'proposed']
+    
+    # Extract seed first (unambiguous)
+    seed_match = re.search(r'_seed(\d+)$', run_id)
+    if not seed_match:
+        raise ValueError(f"Invalid run_id format (no seed): {run_id}")
+    
+    seed = int(seed_match.group(1))
+    # Remove seed suffix to get strategy_scenario
+    strategy_scenario = run_id[:seed_match.start()]
+    
+    # Try each known strategy (longest first to handle prefixes correctly)
+    for strategy in sorted(KNOWN_STRATEGIES, key=len, reverse=True):
+        if strategy_scenario.startswith(strategy + '_'):
+            scenario = strategy_scenario[len(strategy) + 1:]  # +1 for underscore
+            return strategy, scenario, seed
+    
+    raise ValueError(f"Invalid run_id format (unknown strategy): {run_id}")
 
 
 def find_matching_files(run_id: str, directory: Path, extension: str) -> List[Path]:
@@ -308,42 +323,44 @@ def find_orphan_files(raw_dir: Path, aggregated_dir: Path,
 
 def cross_check_status(manifest_runs: List[Dict], status_data: Dict[str, Dict],
                        validation_results: Dict[str, ValidationResult]) -> List[str]:
-    """Cross-check manifest, status file, and filesystem."""
+    """Cross-check manifest, status file, and filesystem.
+    
+    Note: Manifest status represents the PLANNED state and remains immutable.
+    Actual execution state is tracked in matrix_execution_status.csv.
+    """
     mismatches = []
     
     for run in manifest_runs:
         run_id = run['run_id']
-        status = status_data.get(run_id, {}).get('status', 'NOT_IN_STATUS')
+        exec_status = status_data.get(run_id, {}).get('status', 'NOT_IN_STATUS')
         validation = validation_results.get(run_id)
         
         if not validation:
             continue
         
-        # Status says SUCCESS but output missing
-        if status == 'SUCCESS' and not validation.valid:
+        # Execution status says SUCCESS but output missing
+        if exec_status == 'SUCCESS' and not validation.valid:
             if 'No raw CSV file found' in ' '.join(validation.errors) or \
                'No summary JSON file found' in ' '.join(validation.errors):
                 mismatches.append(
-                    f"{run_id}: Status=SUCCESS but outputs missing"
+                    f"{run_id}: Execution status=SUCCESS but outputs missing"
                 )
         
-        # Status says FAILED but output exists
-        if status == 'FAILED' and validation.valid:
+        # Execution status says FAILED but output exists and is valid
+        if exec_status == 'FAILED' and validation.valid:
             mismatches.append(
-                f"{run_id}: Status=FAILED but valid outputs exist"
+                f"{run_id}: Execution status=FAILED but valid outputs exist"
             )
         
-        # Output exists but no status entry
-        if status == 'NOT_IN_STATUS' and validation.valid:
+        # Valid output exists but no execution status entry
+        if exec_status == 'NOT_IN_STATUS' and validation.valid:
             mismatches.append(
-                f"{run_id}: Valid outputs exist but no status entry"
+                f"{run_id}: Valid outputs exist but no execution status entry"
             )
         
-        # Manifest says PLANNED but output already exists
-        if run.get('status') == 'PLANNED' and validation.valid:
-            mismatches.append(
-                f"{run_id}: Manifest status=PLANNED but outputs already exist"
-            )
+        # NOTE: Manifest status=PLANNED is NOT a mismatch.
+        # The manifest represents the immutable plan created before execution.
+        # Actual execution state is tracked in matrix_execution_status.csv.
     
     return mismatches
 
