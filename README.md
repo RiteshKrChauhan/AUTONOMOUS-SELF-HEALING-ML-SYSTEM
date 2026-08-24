@@ -16,6 +16,7 @@ A production-grade, real-time machine learning pipeline for predictive maintenan
 - [API Reference](#api-reference)
 - [Fault Injection Scenarios](#fault-injection-scenarios)
 - [Test Suite](#test-suite)
+- [Research Experiment Framework](#research-experiment-framework)
 - [Pipeline Deep Dive](#pipeline-deep-dive)
 
 ---
@@ -39,7 +40,7 @@ This system trains a **Random Forest regressor** on the NASA CMAPSS turbofan eng
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        Sensor Stream (live)                         │
-│           Simulated from NASA CMAPSS FD001 test split               │
+│   Simulated from NASA CMAPSS train_FD001.txt (unit-disjoint split)   │
 └─────────────────────────┬───────────────────────────────────────────┘
                           │
               ┌───────────▼───────────┐
@@ -106,7 +107,7 @@ This system trains a **Random Forest regressor** on the NASA CMAPSS turbofan eng
 | Anomaly detection | Isolation Forest on incoming sensor feature vectors |
 | Autonomous retraining | Background thread triggered by cooldown + drift threshold |
 | Model quality gate | New model must achieve ≥5% MAE improvement over production |
-| Shadow A/B evaluation | Candidate runs in parallel for 20 cycles before promotion |
+| Shadow A/B evaluation | Candidate runs in parallel for a 20-event live shadow window before promotion |
 | Adaptive rate control | Smoothed EPS controller with 4 states: Nominal / Throttling / Protecting / Draining |
 | Load shedding | FIFO drop with audit trail when 500-event queue is full |
 | Governance audit trail | Bounded ring-buffers for audit logs, alerts, timeline, and model history |
@@ -132,7 +133,7 @@ This system trains a **Random Forest regressor** on the NASA CMAPSS turbofan eng
 - Vanilla CSS
 
 **Testing**
-- pytest with 108 tests across all modules
+- pytest with 113 tests across all modules
 
 ---
 
@@ -183,8 +184,9 @@ AUTONOMOUS-SELF-HEALING-ML-SYSTEM/
 │
 ├── experiments/                # Standalone research experiment framework
 │   ├── config.py               # ExperimentConfig (frozen dataclass, validated)
-│   ├── data_stream.py          # Deterministic event generator (research / legacy mode)
+│   ├── data_stream.py          # Deterministic interleaved fleet stream with per-engine scenarios
 │   ├── baselines.py            # 4 experiment strategies (static, scheduled, naive, proposed)
+│   ├── scenarios.py            # 8 parameterized degradation scenarios  
 │   ├── metrics.py              # RunSummary + summarize_events()
 │   ├── runner.py               # CLI entry point
 │   └── results/                # Per-run CSVs and JSON summaries
@@ -195,7 +197,7 @@ AUTONOMOUS-SELF-HEALING-ML-SYSTEM/
 │   └── processed/
 │       └── preprocess_module.py
 │
-├── tests/                      # pytest suite (108 tests)
+├── tests/                      # pytest suite (113 tests)
 │   ├── test_decision_engine.py
 │   ├── test_adaptive_cooldown.py
 │   ├── test_adwin_detector.py
@@ -215,7 +217,7 @@ AUTONOMOUS-SELF-HEALING-ML-SYSTEM/
 │   ├── test_experiment_config.py
 │   ├── test_experiment_metrics.py
 │   ├── test_experiment_strategies.py
-│   ├── test_experiment_stream.py
+│   ├── test_experiment_stream.py    # Includes interleaved ordering, per-engine onset tests
 │   ├── test_scenario_logic.py
 │   └── test_validation_quality.py
 │
@@ -357,7 +359,7 @@ Scenarios are injected via `POST /api/anomalies` and run for a fixed number of c
 
 ## Test Suite
 
-Run all 108 tests with:
+Run all 113 tests with:
 
 ```bash
 python -m pytest tests/ -v
@@ -385,8 +387,117 @@ python -m pytest tests/ -v
 | `test_experiment_config.py` | 3 | Config validation, output directory creation, path types |
 | `test_experiment_metrics.py` | 6 | Metric definitions, validation-skip counting, gate-reject separation, recovery metrics |
 | `test_experiment_strategies.py` | 1 | Static strategy never retrains |
-| `test_experiment_stream.py` | 3 | Research-mode ordering, seeded legacy mode, fault-injection determinism |
+| `test_experiment_stream.py` | 8 | Interleaved stream ordering, per-engine scenario onset determinism, cycle monotonicity |
 | `test_validation_quality.py` | 11 | Buffer/validation-quality policy, configurable RF seed, config field validation |
+
+---
+
+## Research Experiment Framework
+
+The `experiments/` module provides a standalone framework for reproducible research experiments comparing adaptive ML strategies under controlled degradation scenarios.
+
+### Study Design: Adaptation-Under-Degradation
+
+This research protocol focuses on **autonomous adaptation to ongoing degradation** in fleet-wide predictive maintenance. The 2400-event stream corresponds to approximately **100 lifecycle cycles** across the 24-engine fleet, intentionally configured to observe detection, adaptation, and continued performance under progressive degradation rather than complete degradation lifecycles.
+
+### Stream Modes
+
+- **interleaved** (default, LOCKED for research): Fleet-wide monitoring where observations from all engines are grouped by lifecycle cycle. Simulates parallel monitoring of multiple assets. For cycle c=1,2,3,...: include all engines at cycle c, ordered by unit ID.
+- **research**: Sequential single-asset monitoring preserving full per-engine lifecycle trajectories (unit, cycle order).
+- **legacy**: Dashboard-compatible random permutation with configurable seed.
+
+### Per-Engine Scenario Semantics
+
+Scenarios are applied **per-engine** based on each engine's lifecycle cycle, not global stream position. Each engine receives a deterministic onset cycle within `[scenario_onset_cycle_min, scenario_onset_cycle_max]` using a seeded RNG (`seed + 1000`). Scenario progression is computed as `engine_cycle - engine_onset_cycle`.
+
+**Research protocol (LOCKED):**
+- `scenario_onset_cycle_min = 25`
+- `scenario_onset_cycle_max = 35`
+- Onset variation models realistic fleet conditions where degradation does not start synchronously
+
+Example: With `onset_min=25, onset_max=35, seed=42`:
+- Engine 1 onset = cycle 32
+- Engine 2 onset = cycle 28  
+- Engine 3 onset = cycle 35
+
+### Fleet Configuration
+
+- **Total stream units:** 24 engines (unit-disjoint split of `train_FD001.txt`, seed=42)
+- **Training split (initial model):** 76% of units (76 engines from training data)
+- **Stream units:** 24% of units (24 engines)
+- **Candidate training units:** 18 engines (75% of stream units, unit-disjoint from validation)
+- **Candidate validation units:** 6 engines (25% of stream units, unit-disjoint from training)
+- **Validation enforcement:** `training_units ∩ validation_units = ∅` (required)
+
+### Validation Logging
+
+Every retraining event logs:
+- Buffer composition (rows, units)
+- Training split (rows, units)
+- Validation split (rows, units)
+- Unit disjointness verification
+- Candidate and production MAE
+
+All validation splits enforce unit-disjoint train/test to prevent data leakage.
+
+### Scenario Observability
+
+With `stream_length=2400` (100 cycles):
+
+**Full observability:**
+- **high_noise** (60 cyc): Complete scenario + post-adaptation observation
+- **correlated_drift** (60 cyc): Complete scenario + post-adaptation observation
+- **drift_recovery** (60 cyc): Complete scenario + **TRUE ENVIRONMENTAL RECOVERY** ← only scenario with recovery phase
+
+**Near-complete observability:**
+- **sudden_spike** (80 cyc): 88-94% of scenario visible
+- **sensor_failure** (80 cyc): 88-94% of scenario visible
+- **intermittent_spikes** (90 cyc): 72-83% of scenario visible
+
+**Truncated (adaptation study):**
+- **gradual_drift** (100 cyc): 65-75% of scenario visible; measures adaptation to ongoing degradation
+- **concept_drift** (150 cyc): 43-50% of scenario visible; measures adaptation to observed portion
+
+### Recovery Metrics Interpretation
+
+**Metrics:**
+- `time_to_first_error_recovery`: Samples from first MAE exceedance to first drop below threshold
+- `time_to_sustained_recovery`: Samples from first exceedance to sustained MAE reduction
+
+**IMPORTANT:** These metrics measure **error reduction after adaptation**, not environmental recovery. For scenarios without explicit recovery phases (gradual_drift, concept_drift, etc.), these metrics reflect **adaptation effectiveness** under ongoing degradation. Only **drift_recovery** measures true environmental recovery (return to baseline after degradation ends).
+
+### Locked Research Configuration
+
+```bash
+python -m experiments.runner \
+  --strategy proposed \
+  --scenario gradual_drift \
+  --seed 42 \
+  --stream-mode interleaved \
+  --stream-length 2400 \
+  --scenario-onset-cycle-min 25 \
+  --scenario-onset-cycle-max 35
+```
+
+**Default parameters (locked for research comparability):**
+- `stream_length = 2400` (100 cycles × 24 engines)
+- `scenario_onset_cycle_min = 25, scenario_onset_cycle_max = 35`
+- `minimum_retraining_samples = 55`
+- `minimum_validation_rows = 20, minimum_validation_units = 1`
+- `shadow_window = 20, cooldown = 30`
+- `performance_gate_threshold = 0.95`
+
+Results are written to `experiments/results/raw/` (event-level CSV) and `experiments/results/aggregated/` (summary JSON).
+
+### Reproducing the 96-Run Research Matrix
+
+The command above reproduces a **single run** (one strategy × one scenario × one seed) and matches the actual CLI implemented in `experiments/runner.py`.
+
+The full 96-run matrix (4 strategies × 8 scenarios × 3 seeds) requires orchestration. **Reproducibility scripts for full-matrix execution are planned but not yet implemented** (see `scripts/README.md`).
+
+Until orchestration scripts are implemented, the 96-run matrix can be reproduced by invoking the single-run command above once for each of the 96 (`strategy`, `scenario`, `seed`) combinations.
+
+**Previous archived results:** A complete 96-run matrix was executed on 2026-08-23 and archived externally. See repository documentation for archive details.
 
 ---
 
@@ -398,7 +509,7 @@ Two independent detectors run on every processed event:
 
 1. **ADWIN** (`drift/adwin_detector.py`) — monitors the rolling error stream. Detects **concept drift**: when the model's error distribution shifts, even if input features look normal. Uses `delta=0.002` (strict; fewer false positives).
 
-2. **KS-test** (`drift/data_drift.py`) — runs a Kolmogorov-Smirnov test across all 24 feature columns comparing a reference window against the current window. Applies **Bonferroni correction** to control false discovery rate across multiple simultaneous tests. Drift is confirmed when ≥45% of tested features show significant shift.
+2. **KS-test** (`drift/data_drift.py`) — runs a Kolmogorov-Smirnov test across all 24 feature columns comparing a reference window against the current window. Applies **Bonferroni correction** to control false discovery rate across multiple simultaneous tests. Drift is confirmed when the ratio of drifted features exceeds the configured `drift_feature_ratio_threshold` — **0.12** in the locked research-experiment configuration (`experiments/config.py`); the interactive dashboard (`api_server.py`) uses a separate, more sensitive default of 0.08.
 
 ### Self-Healing Pipeline
 
@@ -408,8 +519,8 @@ When both drift detectors agree and the rolling MAE exceeds threshold, the coold
 2. Validates that the buffer meets the **candidate validation-quality policy** — the disjoint validation set must have at least `minimum_validation_rows` rows and `minimum_validation_units` distinct engine units. If not met, the trigger is recorded as skipped and monitoring continues.
 3. Trains a candidate model via `train_model_with_holdout` with a unit-based train/validation split and the experiment's configured random seed.
 4. Passes the candidate through the **Performance Gate** — it must achieve ≥5% lower MAE than production on held-out data.
-5. Starts **Shadow Evaluation** — the candidate runs in parallel with production for 20 live cycles.
-6. If shadow MAE < production MAE × 0.95 after 20 cycles, the candidate is **promoted** and the Isolation Forest is refitted.
+5. Starts **Shadow Evaluation** — the candidate runs in parallel with production for a 20-event live shadow window (`shadow_window = 20`, counted in streaming events/predictions, not cycles).
+6. If shadow MAE < production MAE × 0.95 after those 20 events, the candidate is **promoted** and the Isolation Forest is refitted.
 
 ### Rate Limiting
 
@@ -435,3 +546,6 @@ Load shedding: when the queue reaches capacity (500), the oldest event is discar
 - RUL is computed as `max_cycle_for_unit - current_cycle` (clipped to 125)
 - 76% of units used for initial training; 24% reserved for the live stream
 - Baseline statistics (mean/std per feature) are computed from the training split and used for drift scoring and scenario scaling
+- Both the live dashboard (`api_server.py`) and the research experiment framework (`experiments/`) load only `dataset/raw/train_FD001.txt` and partition its 100 units into initial-training and streaming/monitoring units (unit-disjoint). The NASA `test_FD001.txt` / `RUL_FD001.txt` split is **not** used by the research matrix or the live stream.
+
+**Dataset provenance:** See [`dataset/PROVENANCE.md`](dataset/PROVENANCE.md) for complete dataset documentation including source, citation, checksums, and usage information.
