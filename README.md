@@ -188,16 +188,26 @@ AUTONOMOUS-SELF-HEALING-ML-SYSTEM/
 │   ├── baselines.py            # 4 experiment strategies (static, scheduled, naive, proposed)
 │   ├── scenarios.py            # 8 parameterized degradation scenarios  
 │   ├── metrics.py              # RunSummary + summarize_events()
-│   ├── runner.py               # CLI entry point
-│   └── results/                # Per-run CSVs and JSON summaries
+│   ├── evaluator.py            # Per-run evaluation helpers
+│   ├── aggregation.py          # Result aggregation helpers used by scripts/analysis
+│   ├── statistical_tests.py    # Friedman/Wilcoxon helpers used by scripts/analysis
+│   ├── runner.py               # CLI entry point (single-run execution)
+│   └── results/                # Final 96-run compact artifacts (raw/aggregated/logs are gitignored)
+│
+├── scripts/                    # Reproducibility pipeline (see scripts/README.md)
+│   ├── matrix_orchestration/   # generate_manifest.py, run_matrix.py, verify_completion.py
+│   └── analysis/                # aggregate_results.py, statistical_qc.py, statistical_analysis.py, generate_figures.py
 │
 ├── dataset/
 │   ├── raw/
-│   │   └── train_FD001.txt     # NASA CMAPSS dataset (100 engine units)
-│   └── processed/
-│       └── preprocess_module.py
+│   │   ├── train_FD001.txt     # NASA CMAPSS dataset (100 engine units, active)
+│   │   ├── test_FD001.txt      # NASA CMAPSS test split (present, not used by the research matrix)
+│   │   └── RUL_FD001.txt       # True RUL for test split (present, not used by the research matrix)
+│   ├── processed/
+│   │   └── preprocess_module.py
+│   └── PROVENANCE.md           # Dataset source, citation, checksums
 │
-├── tests/                      # pytest suite (113 tests)
+├── tests/                      # pytest suite (258 tests across 28 modules)
 │   ├── test_decision_engine.py
 │   ├── test_adaptive_cooldown.py
 │   ├── test_adwin_detector.py
@@ -219,7 +229,13 @@ AUTONOMOUS-SELF-HEALING-ML-SYSTEM/
 │   ├── test_experiment_strategies.py
 │   ├── test_experiment_stream.py    # Includes interleaved ordering, per-engine onset tests
 │   ├── test_scenario_logic.py
-│   └── test_validation_quality.py
+│   ├── test_validation_quality.py
+│   ├── test_manifest_generator.py   # scripts/matrix_orchestration/generate_manifest.py
+│   ├── test_matrix_runner.py        # scripts/matrix_orchestration/run_matrix.py (mocked, no real execution)
+│   ├── test_completion_verifier.py  # scripts/matrix_orchestration/verify_completion.py
+│   ├── test_result_aggregation.py   # scripts/analysis/aggregate_results.py
+│   ├── test_statistical_qc.py       # scripts/analysis/statistical_qc.py
+│   └── test_statistical_analysis.py # scripts/analysis/statistical_analysis.py
 │
 ├── frontend/                   # React + Vite dashboard
 │   └── src/
@@ -359,7 +375,7 @@ Scenarios are injected via `POST /api/anomalies` and run for a fixed number of c
 
 ## Test Suite
 
-Run all 113 tests with:
+Run all 258 tests with:
 
 ```bash
 python -m pytest tests/ -v
@@ -384,11 +400,17 @@ python -m pytest tests/ -v
 | `test_scenario_logic.py` | 5 | Per-scenario detectability assertions (KS, ADWIN, IsolationForest) |
 | `test_train.py` | 4 | Normal training, insufficient-data guard, single-unit fallback, model inference |
 | `test_common_validation.py` | 5 | Disjoint train/val split, no leakage, common validation set integrity |
-| `test_experiment_config.py` | 3 | Config validation, output directory creation, path types |
+| `test_experiment_config.py` | 4 | Config validation, output directory creation, path types, runner CLI defaults regression |
 | `test_experiment_metrics.py` | 6 | Metric definitions, validation-skip counting, gate-reject separation, recovery metrics |
 | `test_experiment_strategies.py` | 1 | Static strategy never retrains |
 | `test_experiment_stream.py` | 8 | Interleaved stream ordering, per-engine scenario onset determinism, cycle monotonicity |
 | `test_validation_quality.py` | 11 | Buffer/validation-quality policy, configurable RF seed, config field validation |
+| `test_manifest_generator.py` | 17 | Deterministic 96-run manifest generation (`scripts/matrix_orchestration/generate_manifest.py`) |
+| `test_matrix_runner.py` | 16 | Matrix orchestration logic, mocked subprocess execution — no real experiments run (`scripts/matrix_orchestration/run_matrix.py`) |
+| `test_completion_verifier.py` | 40 | Per-run output validation against manifest (`scripts/matrix_orchestration/verify_completion.py`) |
+| `test_result_aggregation.py` | 11 | Raw/summary aggregation into compact results table (`scripts/analysis/aggregate_results.py`) |
+| `test_statistical_qc.py` | 27 | Structural/statistical QC checks (`scripts/analysis/statistical_qc.py`) |
+| `test_statistical_analysis.py` | 33 | Friedman/Wilcoxon/Holm-Bonferroni statistical pipeline (`scripts/analysis/statistical_analysis.py`) |
 
 ---
 
@@ -489,15 +511,85 @@ python -m experiments.runner \
 
 Results are written to `experiments/results/raw/` (event-level CSV) and `experiments/results/aggregated/` (summary JSON).
 
-### Reproducing the 96-Run Research Matrix
+### Final 96-Run Research Matrix: Status
 
-The command above reproduces a **single run** (one strategy × one scenario × one seed) and matches the actual CLI implemented in `experiments/runner.py`.
+The full factorial matrix — **4 strategies × 8 scenarios × 3 seeds = 96 runs** — has **already been executed successfully** (96/96 succeeded, 0 failed, 0 skipped) under the locked protocol above. The compact, final results are committed in this repository under [`experiments/results/`](experiments/results/README.md):
 
-The full 96-run matrix (4 strategies × 8 scenarios × 3 seeds) requires orchestration. **Reproducibility scripts for full-matrix execution are planned but not yet implemented** (see `scripts/README.md`).
+- `experiment_manifest.csv` — the deterministic 96-run manifest
+- `aggregated_results.csv` + `aggregated_results.qc.json` — per-run metrics and QC status
+- `statistical_analysis.json` / `.md` — Friedman + Wilcoxon (Holm-Bonferroni) results
+- `provenance.json` — full run/software/commit provenance
+- `verification_report.json` / `.md` — per-run completion verification
+- `figures/*.png` — the 8 publication-quality figures
 
-Until orchestration scripts are implemented, the 96-run matrix can be reproduced by invoking the single-run command above once for each of the 96 (`strategy`, `scenario`, `seed`) combinations.
+Detailed per-run outputs (96 raw event-level CSVs, 96 per-run summary JSONs, and execution logs — roughly 80MB) are **not** stored in Git. They are preserved in the external research archive (see [Where Raw Outputs Are Archived](#where-raw-outputs-are-archived) below) and are not required to inspect or reproduce the final analysis.
 
-**Previous archived results:** A complete 96-run matrix was executed on 2026-08-23 and archived externally. See repository documentation for archive details.
+### Reproducing the Analysis (recommended — does not require rerunning experiments)
+
+Because the frozen aggregated results are committed to this repository, the statistical analysis and figures can be regenerated deterministically **without re-executing any experiments**:
+
+```bash
+# Re-run QC on the committed aggregated results
+python -m scripts.analysis.statistical_qc \
+  --aggregated experiments/results/aggregated_results.csv \
+  --manifest experiments/results/experiment_manifest.csv \
+  --output experiments/results/aggregated_results.qc.json
+
+# Re-run the Friedman + Wilcoxon (Holm-Bonferroni) statistical analysis
+python -m scripts.analysis.statistical_analysis \
+  --aggregated experiments/results/aggregated_results.csv \
+  --manifest experiments/results/experiment_manifest.csv \
+  --qc-report experiments/results/aggregated_results.qc.json \
+  --output experiments/results \
+  --block-def scenario_seed
+
+# Regenerate the 8 publication figures
+python -m scripts.analysis.generate_figures \
+  --aggregated experiments/results/aggregated_results.csv \
+  --statistical experiments/results/statistical_analysis.json \
+  --output experiments/results/figures
+```
+
+These scripts are deterministic given the same input data, but exact byte-for-byte reproduction across arbitrary Python/library versions is not guaranteed — see [Environment](#locked-research-configuration) for the versions used to produce the committed results.
+
+### Reproducing the Experiment From Scratch (optional — not required to inspect results)
+
+The full reproducibility pipeline used to produce the committed results is:
+
+```
+generate_manifest → run_matrix → verify_completion → aggregate_results → statistical_qc → statistical_analysis → generate_figures
+```
+
+```bash
+# 1. Generate the deterministic 96-run manifest
+python -m scripts.matrix_orchestration.generate_manifest \
+  --output-dir experiments/results
+
+# 2. Execute the full matrix (long-running: ~4 hours; runs experiments/runner.py per manifest row)
+python -m scripts.matrix_orchestration.run_matrix \
+  --manifest experiments/results/experiment_manifest.csv \
+  --yes
+
+# 3. Verify all 96 runs completed with valid outputs
+python -m scripts.matrix_orchestration.verify_completion \
+  --manifest experiments/results/experiment_manifest.csv \
+  --results-dir experiments/results \
+  --strict
+
+# 4. Aggregate raw outputs into the compact results table
+python -m scripts.analysis.aggregate_results \
+  --manifest experiments/results/experiment_manifest.csv \
+  --results-dir experiments/results \
+  --output experiments/results/aggregated_results.csv
+
+# 5-7. Then run statistical_qc, statistical_analysis, and generate_figures as shown above.
+```
+
+**This is not necessary to inspect, cite, or verify the final results** — it is documented only for readers who want to independently re-execute the full study. Rerunning `run_matrix` will overwrite `experiments/results/raw/`, `experiments/results/aggregated/`, and `experiments/results/logs/` with new timestamped outputs; the committed compact artifacts in this repository reflect the frozen, already-completed 96-run experiment (manifest git commit `fa6cbd5571184daf2ddbebd319aaf6614c276f9b`).
+
+### Where Raw Outputs Are Archived
+
+The 96 raw event-level CSVs, 96 per-run summary JSONs, execution logs, and the mini-matrix validation artifacts used to bring up this pipeline are preserved outside Git in an external research archive, along with a checksum manifest. They are intentionally excluded from version control (see `.gitignore`) to keep the repository lightweight; the compact artifacts under `experiments/results/` contain everything needed to verify and cite the final results.
 
 ---
 

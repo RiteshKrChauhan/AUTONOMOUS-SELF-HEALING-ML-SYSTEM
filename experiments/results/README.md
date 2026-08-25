@@ -1,56 +1,50 @@
 # Experiment Results
 
-This directory contains experimental results from the research framework.
+This directory contains the final compact research artifacts for the completed
+96-run experiment matrix (4 strategies × 8 scenarios × 3 seeds), executed under
+the locked protocol `stream_length=2400`, `stream_mode=interleaved`,
+`scenario_onset_cycle=[25, 35]`.
 
-## Directory Structure
+## Status
 
-```
-results/
-├── raw/                    # Event-level CSV files (one per run)
-├── aggregated/             # Summary JSON files (one per run)
-└── figures/                # Generated visualizations
-```
+✅ **Complete.** 96/96 runs succeeded, 0 failed, 0 skipped.
 
-## Current Status
+## Committed Artifacts (tracked in Git)
 
-✅ **Directory structure created**  
-⚠️ **No current experiment results**
+| File | Description |
+|------|-------------|
+| `experiment_manifest.csv` | Deterministic 96-run manifest (strategy × scenario × seed) |
+| `aggregated_results.csv` | One row per run: MAE, RMSE, detection/adaptation/recovery metrics |
+| `aggregated_results.qc.json` | Structural and statistical QC report (0 issues) |
+| `statistical_analysis.json` / `.md` | 5 Friedman tests + 30 Wilcoxon pairwise comparisons (Holm-Bonferroni corrected); 27/30 significant |
+| `provenance.json` | Dataset checksum, git commit lineage, software environment, full run provenance |
+| `verification_report.json` / `.md` | Per-run completion verification (96/96 valid, 0 missing, 0 duplicate) |
+| `figures/*.png` | 8 publication-quality figures (300 DPI) generated from the frozen results |
+| `README.md` | This file |
 
-Previous research artifacts (96-run valid matrix, invalid matrix) have been archived externally and removed from the working repository to establish a clean baseline for reproducibility-first workflows.
+## Artifacts Preserved Outside Git (external research archive)
 
-## Archived Results
-
-Previous experimental artifacts are preserved in:
-```
-E:\Capstone Projects\AUTONOMOUS_ML_ARCHIVE_20260824\
-```
-
-See `ARCHIVE_RESTORE_VERIFICATION.md` (in archive) for complete inventory.
-
-## Future Results
-
-New experimental results will be generated using reproducibility scripts in `scripts/` (not yet implemented).
-
-Expected structure for future matrix runs:
+The following detailed, per-run outputs are **not** committed to Git (see
+`.gitignore`) to keep the repository lightweight. They remain on disk locally
+and are preserved with checksums in the external research archive:
 
 ```
 results/
-├── matrix_YYYYMMDD_HHMMSS/
-│   ├── experiment_manifest.csv
-│   ├── experiment_results.csv
-│   ├── matrix_execution_log.json
-│   ├── qc_status.json
-│   ├── PROVENANCE_REPORT.md
-│   ├── raw/
-│   │   ├── {run_id}_events.csv (96 files)
-│   ├── aggregated/
-│   │   ├── {run_id}_summary.json (96 files)
-│   ├── statistical_analysis/
-│   │   ├── *.csv (7 files)
-│   │   ├── *.md (reports)
-│   │   └── figures/
-│   │       └── *.png (7 figures)
+├── raw/         # 96 event-level CSV files (one per run)
+├── aggregated/  # 96 per-run summary JSON files
+├── logs/        # stdout/stderr execution logs
+└── mini_matrix/ # small-scale validation runs used to build this pipeline (not part of the 96-run matrix)
 ```
+
+Also excluded from Git: `matrix_execution.log.json` and
+`matrix_execution_status.csv` (raw per-run execution timing/status ledger —
+their summary information is already captured in `verification_report.*` and
+`provenance.json`).
+
+None of this is required to inspect, verify, or cite the final results — the
+compact artifacts above are self-contained. See the main project `README.md`
+("Reproducing the Analysis" / "Reproducing the Experiment From Scratch") for
+how to regenerate them if needed.
 
 ## Run ID Format
 
@@ -64,21 +58,8 @@ Examples:
 - `proposed_sudden_spike_seed123`
 - `scheduled_high_noise_seed456`
 
-## Single-Run Execution
+## Reproducing the Analysis
 
-To execute a single experimental run:
-
-```bash
-python -m experiments.runner \
-  --strategy proposed \
-  --scenario gradual_drift \
-  --seed 42 \
-  --stream-mode interleaved \
-  --stream-length 2400
-```
-
-Results are written to:
-- `raw/{run_id}_{timestamp}_events.csv`
-- `aggregated/{run_id}_{timestamp}_summary.json`
-
-See `experiments/README.md` for full documentation.
+The analysis (QC, statistics, figures) can be regenerated from the committed
+`aggregated_results.csv` without re-executing any experiments — see the main
+project `README.md` for exact commands.
