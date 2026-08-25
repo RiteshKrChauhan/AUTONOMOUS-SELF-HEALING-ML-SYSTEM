@@ -649,10 +649,9 @@ A comprehensive 96-run controlled experiment (4 strategies × 8 degradation scen
 
 | RQ | Topic | Status |
 |----|-------|--------|
-| RQ1 | Integration (multi-channel detection + autonomous retraining) | 🟡 Partially Answered |
-| RQ2 | Safety Gating (offline + shadow validation) | 🟡 Partially Answered |
-| RQ3 | Trade-offs (accuracy vs. stability vs. overhead) | ✅ Fully Answered |
-| RQ4 | Resource Constraints (edge deployment, rate limiting) | ❌ Out of Scope |
+| RQ1 | Model adaptation strategies and RUL prediction accuracy under non-stationary degradation | ✅ Fully Answered |
+| RQ2 | Safety of model promotion via offline validation + live shadow evaluation | ✅ Fully Answered |
+| RQ3 | Trade-offs (accuracy vs. drift detection delay vs. promotion frequency vs. adaptation time) | ✅ Fully Answered |
 
 **Core Contribution:** RQ3 provides the strongest empirical result—a clear, statistically validated quantification of the stability–accuracy–overhead trade-off across diverse degradation scenarios.
 
