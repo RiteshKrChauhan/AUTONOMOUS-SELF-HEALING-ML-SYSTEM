@@ -414,7 +414,11 @@ def perform_pairwise_tests(data_matrix: np.ndarray, strategies: List[str],
     # Update results
     for i, result in enumerate(results):
         result.corrected_p_value = corrected_p[i]
-        result.significant_corrected = corrected_significant[i]
+        # Significance is based on corrected p-value, not Holm step-down
+        if corrected_p[i] is not None and not np.isnan(corrected_p[i]):
+            result.significant_corrected = corrected_p[i] < alpha
+        else:
+            result.significant_corrected = False
     
     return results
 
@@ -453,15 +457,40 @@ def run_statistical_analysis(aggregated_file: Path, manifest_file: Path,
     validate_qc_passed(qc_report)
     
     # Extract provenance
-    if rows:
-        git_commit = rows[0].get('git_commit', 'unknown')
-        dataset_checksum = rows[0].get('dataset_checksum', 'unknown')
-        python_version = rows[0].get('python_version', 'unknown')
+    # Try to get git commit from repository (navigate to workspace root first)
+    workspace_root = aggregated_file.parent.parent.parent if 'experiments' in str(aggregated_file) else aggregated_file.parent.parent
+    try:
+        import subprocess
+        result = subprocess.run(['git', 'rev-parse', 'HEAD'], 
+                              capture_output=True, text=True, cwd=workspace_root)
+        git_commit = result.stdout.strip() if result.returncode == 0 else 'unknown'
+    except Exception:
+        git_commit = 'unknown'
+    
+    # Try to get dataset checksum
+    # Navigate from aggregated file: experiments/results/... -> workspace root
+    workspace_root = aggregated_file.parent.parent.parent if 'experiments' in str(aggregated_file) else aggregated_file.parent.parent
+    dataset_file = workspace_root / 'dataset' / 'raw' / 'train_FD001.txt'
+    if dataset_file.exists():
+        try:
+            import hashlib
+            with open(dataset_file, 'rb') as f:
+                dataset_checksum = hashlib.md5(f.read()).hexdigest()
+        except Exception:
+            dataset_checksum = 'unknown'
     else:
-        git_commit = dataset_checksum = python_version = 'unknown'
+        dataset_checksum = 'unknown'
+    
+    # Get Python version
+    import sys
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     
     # Get library versions
-    scipy_version = getattr(stats, '__version__', 'unknown')
+    try:
+        import scipy
+        scipy_version = scipy.__version__
+    except Exception:
+        scipy_version = 'unknown'
     numpy_version = np.__version__
     
     # Build report
