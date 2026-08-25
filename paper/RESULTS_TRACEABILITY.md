@@ -40,11 +40,12 @@
 | Proposed MAE | 10.79 | Computed from aggregated_results.csv | `groupby('strategy')['mae'].mean()` for 'proposed' |
 | Naive adaptive MAE | 9.94 | Computed from aggregated_results.csv | `groupby('strategy')['mae'].mean()` for 'naive_adaptive' |
 | Scheduled MAE | 8.71 | Computed from aggregated_results.csv | `groupby('strategy')['mae'].mean()` for 'scheduled' |
-| 10% higher MAE | (10.79 - 9.94) / 9.94 | Derived | 8.5% ≈ 10% (rounded) |
-| 24% higher MAE | (10.79 - 8.71) / 8.71 | Derived | 23.9% ≈ 24% (rounded) |
+| 8.5% higher MAE (vs naive) | (10.79 - 9.94) / 9.94 | Derived | 8.55% (rounded to 8.5%) |
+| 23.9% higher MAE (vs scheduled) | (10.79 - 8.71) / 8.71 | Derived | 23.88% (rounded to 23.9%) |
 | Proposed adaptation time | 46.2s | Computed from aggregated_results.csv | `groupby('strategy')['total_adaptation_time'].mean()` for 'proposed' |
 | Naive adaptive adaptation time | 5.0s | Computed from aggregated_results.csv | `groupby('strategy')['total_adaptation_time'].mean()` for 'naive_adaptive' |
-| 9× overhead | 46.2 / 5.0 | Derived | proposed / naive_adaptive |
+| 9.2× overhead (proposed vs naive) | 46.2 / 5.0 = 9.17 | Derived | proposed / naive_adaptive |
+| 6.9× overhead (proposed vs scheduled) | 46.2 / 6.7 = 6.90 | Derived | proposed / scheduled |
 | Friedman p < 0.001 | p = 8.72e-15 | statistical_analysis.json | `$.friedman_tests.mae.p_value` |
 | Dataset | NASA C-MAPSS FD001 | provenance.json | `$.dataset.source` |
 | Dataset checksum | 1721c96c01e188569f0e7bb16b1ea493 | provenance.json | `$.dataset.files.train.checksum_md5` |
@@ -101,8 +102,8 @@
 | Random seeds | 42, 123, 456 | statistical_analysis.json | `$.seeds[]` |
 | Number of blocks | 24 | statistical_analysis.json | `$.n_blocks` |
 | Block definition | scenario_seed | statistical_analysis.json | `$.block_definition` |
-| Train fraction | 0.76 | aggregated_results.csv | `train_fraction` column |
-| Validation fraction | 0.25 | aggregated_results.csv | `validation_fraction` column |
+| Train fraction (initial train/stream split) | 0.76 | aggregated_results.csv | `train_fraction` column (76% units for initial training, 24% for stream) |
+| Validation fraction (retraining buffer split) | 0.25 | aggregated_results.csv | `validation_fraction` column (75% train, 25% validation within buffer) |
 | Retraining interval | 100 | aggregated_results.csv | `retraining_interval` column |
 
 ---
@@ -155,10 +156,12 @@
 | All pairwise significant | 6/6 | statistical_analysis.json | Count `$.pairwise_tests.model_promoted_events[]` where `significant_corrected == true` |
 | Effect sizes | r = 1.0 | statistical_analysis.json | `$.pairwise_tests.model_promoted_events[].effect_size` |
 | Candidates generated (proposed) | 12.17 | aggregated_results.csv | `df[df.strategy=='proposed']['candidates_generated'].mean()` |
-| Gate accepts (proposed) | 1.83 | aggregated_results.csv | `df[df.strategy=='proposed']['gate_accepts'].mean()` |
+| Gate accepts (proposed) | 2.00 | aggregated_results.csv | `df[df.strategy=='proposed']['gate_accepts'].mean()` |
 | Gate rejects (proposed) | 10.17 | aggregated_results.csv | `df[df.strategy=='proposed']['gate_rejects'].mean()` |
+| Offline gate rejection rate | 10.17 / 12.17 = 83.6% | Derived | Gate rejects / Candidates generated |
 | Shadow promotions (proposed) | 1.83 | aggregated_results.csv | `df[df.strategy=='proposed']['shadow_promotions'].mean()` |
-| Shadow rejections (proposed) | 0.00 | aggregated_results.csv | `df[df.strategy=='proposed']['shadow_rejections'].mean()` |
+| Shadow rejections (proposed) | 0.17 | aggregated_results.csv | `df[df.strategy=='proposed']['shadow_rejections'].mean()` |
+| Overall filtering rate (pre-promotion) | (12.17 - 1.83) / 12.17 = 84.9% | Derived | (Candidates - Promotions) / Candidates |
 
 ---
 
@@ -198,10 +201,10 @@
 | Metric | Value | Source | Computation |
 |--------|-------|--------|-------------|
 | Candidates generated | 12.17 ± 2.68 | aggregated_results.csv | `df[df.strategy=='proposed']['candidates_generated'].agg(['mean', 'std'])` |
-| Gate accepts | 1.83 ± 1.05 | aggregated_results.csv | `df[df.strategy=='proposed']['gate_accepts'].agg(['mean', 'std'])` |
+| Gate accepts | 2.00 ± 1.22 | aggregated_results.csv | `df[df.strategy=='proposed']['gate_accepts'].agg(['mean', 'std'])` |
 | Gate rejects | 10.17 ± 2.16 | aggregated_results.csv | `df[df.strategy=='proposed']['gate_rejects'].agg(['mean', 'std'])` |
 | Shadow promotions | 1.83 ± 1.05 | aggregated_results.csv | `df[df.strategy=='proposed']['shadow_promotions'].agg(['mean', 'std'])` |
-| Shadow rejections | 0.00 ± 0.00 | aggregated_results.csv | `df[df.strategy=='proposed']['shadow_rejections'].agg(['mean', 'std'])` |
+| Shadow rejections | 0.17 ± 0.48 | aggregated_results.csv | `df[df.strategy=='proposed']['shadow_rejections'].agg(['mean', 'std'])` |
 | Degraded promotions (total across 24 proposed runs) | 20 | aggregated_results.csv | `df[df.strategy=='proposed']['degraded_promotions'].sum()` |
 | Total promotions across 24 proposed runs | 44 | aggregated_results.csv | `df[df.strategy=='proposed']['model_promoted_events'].sum()` |
 | Degraded promotion rate | 45.5% | Derived | 20 / 44 = 0.4545 (out of 44 total proposed-strategy promotions) |
@@ -292,7 +295,7 @@ All figures located in `experiments/results/figures/` at 300 DPI resolution.
 
 1. **Rounding:** Some values in the paper are rounded for readability (e.g., 8.708 → 8.71, 10.794 → 10.79). Exact values are preserved in this traceability document.
 
-2. **Derived Values:** Percentages (10%, 24%), ratios (6.4×, 12.6×, 9×), and comparisons are computed from primary metrics. Computation formulas are documented in the "Computation" column.
+2. **Derived Values:** Percentages, ratios (6.4×, 12.6×, 9.2×, 6.9×), and comparisons are computed from primary metrics. Computation formulas are documented in the "Computation" column.
 
 3. **Statistical Tables:** Full pairwise comparison tables are available in `statistical_analysis.json`. The paper excerpts key comparisons; this document provides complete paths for verification.
 

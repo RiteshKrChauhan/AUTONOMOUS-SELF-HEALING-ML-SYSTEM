@@ -8,7 +8,7 @@
 
 ## Abstract
 
-Adaptive model management for physical prognostics faces a critical but underexplored trade-off: aggressive adaptation (frequent retraining) minimizes prediction error but increases model churn and operational risk, while conservative adaptation (rigorous gating) maximizes model stability but may degrade prediction accuracy. Existing work fragments this problem across three domains—physical prognostics focuses on RUL models without adaptation strategies, drift detection research emphasizes statistical methods without safety gating, and software engineering explores canary deployment without targeting physical streams. We present an integrated closed-loop MLOps architecture combining multi-channel statistical drift detection (ADWIN concept drift, KS-test feature drift with Bonferroni correction, Isolation Forest anomaly detection), autonomous background retraining, and two-stage model validation (offline performance gate plus live parallel shadow evaluation) specifically for continuous remaining useful life (RUL) regression on streaming turbofan telemetry. A comprehensive 96-run controlled experiment (4 strategies × 8 degradation scenarios × 3 seeds, blocked factorial design) on NASA C-MAPSS FD001 reveals that conservative multi-gated adaptation achieves 6.4–12.6× lower model replacement frequency than aggressive baselines (1.83 vs. 11.67 vs. 23.0 promotions per 2400-cycle stream, *p* < 0.001, Friedman test) at the cost of 10–24% higher prediction error (MAE 10.79 vs. 9.94 vs. 8.71, *p* < 0.001) and 9× higher adaptation overhead (46.2s vs. 5.0s, *p* < 0.001). This trade-off is statistically significant in the blocked 96-run design spanning all eight degradation scenarios (concept drift, correlated drift, sensor failures, noise spikes), suggesting the optimal adaptation policy is domain-specific rather than universally optimal. Safety-critical systems may prioritize stability (proposed), while offline batch prediction may prioritize accuracy (scheduled). We provide a deterministic reproducibility pipeline with provenance tracking, enabling exact replication of all 96 experimental runs.
+Adaptive model management for physical prognostics faces a critical but underexplored trade-off: aggressive adaptation (frequent retraining) minimizes prediction error but increases model churn and operational risk, while conservative adaptation (rigorous gating) maximizes model stability but may degrade prediction accuracy. Existing work fragments this problem across three domains—physical prognostics focuses on RUL models without adaptation strategies, drift detection research emphasizes statistical methods without safety gating, and software engineering explores canary deployment without targeting physical streams. We present an integrated closed-loop MLOps architecture combining multi-channel statistical drift detection (ADWIN concept drift, KS-test feature drift with Bonferroni correction, Isolation Forest anomaly detection), autonomous background retraining, and two-stage model validation (offline performance gate plus live parallel shadow evaluation) specifically for continuous remaining useful life (RUL) regression on streaming turbofan telemetry. A comprehensive 96-run controlled experiment (4 strategies × 8 degradation scenarios × 3 seeds, blocked factorial design) on NASA C-MAPSS FD001 reveals that conservative multi-gated adaptation achieves 6.4–12.6× lower model replacement frequency than aggressive baselines (1.83 vs. 11.67 vs. 23.0 promotions per 2400-cycle stream, *p* < 0.001, Friedman test) at the cost of 8.5–23.9% higher prediction error (MAE 10.79 vs. 9.94 vs. 8.71, *p* < 0.001) and 9.2× higher adaptation overhead than naive adaptive (46.2s vs. 5.0s, *p* < 0.001). This trade-off is statistically significant in the blocked 96-run design spanning all eight degradation scenarios (concept drift, correlated drift, sensor failures, noise spikes), suggesting the optimal adaptation policy is domain-specific rather than universally optimal. The results indicate that applications prioritizing model stability may prefer conservative adaptation, whereas applications prioritizing prediction accuracy may prefer more aggressive adaptation. We provide a deterministic reproducibility pipeline with provenance tracking, enabling exact replication of all 96 experimental runs.
 
 **Keywords:** Physical prognostics, remaining useful life, concept drift, model adaptation, shadow evaluation, performance gating, self-healing ML, NASA C-MAPSS
 
@@ -34,7 +34,7 @@ We address three research questions:
 
 **RQ1:** How do different model adaptation strategies affect RUL prediction accuracy under diverse non-stationary degradation scenarios?
 
-**RQ2:** To what extent does combining offline validation and live shadow evaluation improve the safety of model promotion under streaming drift compared with trigger-and-replace adaptation?
+**RQ2:** How does combining offline validation and live shadow evaluation affect candidate filtering and model-promotion behavior under streaming drift compared with trigger-and-replace adaptation?
 
 **RQ3:** What trade-offs arise between prediction accuracy, drift detection delay, model-promotion frequency, and adaptation time across different adaptation strategies?
 
@@ -44,9 +44,9 @@ This work makes three contributions:
 
 1. **Integrated Architecture:** A closed-loop MLOps architecture synthesizing multi-channel statistical drift detection, autonomous background retraining, and two-stage model promotion (offline performance gate + live shadow evaluation) for physical RUL regression on streaming telemetry.
 
-2. **Two-Stage Gating Protocol:** A methodological contribution combining offline validation (candidate must outperform production on held-out data by ≥5%) with live shadow evaluation (candidate must outperform production on 20 parallel predictions) to prevent degraded model promotions.
+2. **Two-Stage Gating Protocol:** A methodological contribution combining offline validation (candidate must outperform production on held-out data by ≥5%) with live shadow evaluation (candidate must outperform production on 20 parallel predictions) to filter candidates that fail offline or live-stream performance checks before promotion.
 
-3. **Trade-off Quantification:** Empirical demonstration that conservative multi-gated adaptation reduces model replacement frequency by 6.4–12.6× at the cost of 10–24% higher MAE and 9× higher adaptation overhead, revealing a fundamental stability–accuracy trade-off validated across 8 degradation scenarios.
+3. **Trade-off Quantification:** Empirical demonstration that conservative multi-gated adaptation reduces model replacement frequency by 6.4–12.6× at the cost of 8.5–23.9% higher MAE and 9.2× higher adaptation overhead than naive adaptive (and 6.9× higher than scheduled), revealing a fundamental stability–accuracy trade-off validated across 8 degradation scenarios.
 
 ### 1.5 Paper Organization
 
@@ -110,7 +110,7 @@ The literature contains:
 - Statistical drift detection **without safety-critical promotion protocols**
 - Shadow testing **without application to non-stationary physical streams**
 
-No prior work integrates **multi-channel statistical drift detection**, **autonomous background retraining**, **offline performance gating**, and **live parallel shadow evaluation** into a unified closed-loop architecture for continuous RUL regression on streaming physical telemetry. Furthermore, the **stability–accuracy trade-off** inherent in choosing between aggressive and conservative adaptation policies has not been empirically quantified across diverse degradation scenarios.
+The reviewed literature does not provide a systematic evaluation of an integrated architecture combining multi-channel statistical drift detection, autonomous background retraining, offline performance gating, and live parallel shadow evaluation for continuous RUL regression on streaming physical telemetry. Furthermore, the **stability–accuracy trade-off** inherent in choosing between aggressive and conservative adaptation policies has not been empirically quantified across diverse degradation scenarios.
 
 ---
 
@@ -150,7 +150,7 @@ State transitions are governed by thresholds on drift score (weighted combinatio
 
 When the decision engine triggers retraining:
 
-1. **Validation Buffer Construction:** Extract most recent data meeting quality criteria (minimum 55 samples, minimum 1 unique engine unit, 76% train / 24% validation split).
+1. **Validation Buffer Construction:** Extract most recent data meeting quality criteria (minimum 55 samples, minimum 1 unique engine unit, 75% train / 25% validation split within retraining buffer).
 
 2. **Background Candidate Training:** Train a Random Forest regressor (100 trees, max depth 20) on training partition without blocking the live prediction stream.
 
@@ -185,7 +185,7 @@ Candidates passing the offline gate enter parallel shadow testing:
 3. After collecting 20 parallel predictions, compute MAE for both models
 4. **Promotion Criterion:** Promote candidate if shadow MAE < production MAE × 0.95 (i.e., candidate is at least 5% better on live stream)
 
-**Shadow Rejection:** Candidates performing worse than production during shadow testing are discarded. This prevents promotion of models that validated well offline but degrade on the live, non-stationary stream.
+**Shadow Rejection:** Candidates performing worse than production during shadow testing are discarded. This is intended to filter candidates that perform worse than the current production model during the shadow evaluation window.
 
 **Duration:** Shadow evaluation typically requires 20 samples, introducing latency of 20–100 cycles depending on stream rate and scenario dynamics.
 
@@ -223,13 +223,15 @@ We use the NASA Commercial Modular Aero-Propulsion System Simulation (C-MAPSS) t
 
 This dataset is widely used in physical prognostics research, enabling comparison with prior work [2, 3, 12, 17, 22].
 
+**Train/Stream Split:** The 100-engine training set is split into initial training units (76%, ~76 engines) and streaming units (24%, ~24 engines). The initial training units are used to train the baseline model deployed at stream start; the streaming units form the live evaluation stream.
+
 ### 4.2 Stream Construction: Interleaved Fleet Monitoring
 
 Rather than sequential single-engine streams, we construct **interleaved multi-engine streams** simulating real-world fleet monitoring:
 
 1. **Stream Length:** 2400 samples per experimental run
 2. **Stream Mode:** Interleaved—round-robin sampling from multiple engines to simulate parallel fleet monitoring
-3. **Engine Selection:** Randomly sample 10–15 engines from training set, interleave their lifecycles
+3. **Engine Selection:** Randomly sample 10–15 engines from the 24% streaming unit pool, interleave their lifecycles
 4. **Scenario Injection:** Apply degradation scenarios (drift, noise, sensor failures) starting at randomly selected cycle within [25, 35] to simulate non-stationary conditions
 
 This design tests adaptation under realistic multi-asset monitoring where the model must generalize across engines at different degradation stages.
@@ -374,12 +376,13 @@ Proposed adaptation achieves dramatically lower promotion counts: 1.83 promotion
 
 **Statistical Significance:** Friedman test for model_promoted_events: χ²(3) = 72.00, *p* < 0.001. All 6 pairwise comparisons are statistically significant (*p* < 0.001) with effect sizes *r* = 1.0 (maximum).
 
-**Mechanism:** The two-stage gating protocol (offline + shadow) filters out 83.3% of generated candidates:
+**Mechanism:** The two-stage gating protocol filters candidates at two levels. The offline gate rejects 83.6% of generated candidates (10.17 out of 12.17). Across both stages (offline gate + shadow evaluation), only 1.83 of 12.17 generated candidates are ultimately promoted, meaning 84.9% are filtered before promotion:
 - Candidates generated: 12.17 (mean)
-- Gate accepts: 1.83 (mean)
-- Gate rejects: 10.17 (mean)
+- Offline gate rejects: 10.17 (83.6% rejection rate)
+- Offline gate accepts: 2.00 (candidates entering shadow)
 - Shadow promotions: 1.83 (mean)
-- Shadow rejections: 0.00 (mean, because shadow evaluation only occurs for gate-passing candidates, and most eventually promote)
+- Shadow rejections: 0.17 (mean)
+- Overall filtering rate: 84.9% (before promotion)
 
 **Interpretation:** Rigorous validation prevents premature or marginal model replacements, prioritizing stability over aggressive adaptation.
 
@@ -421,9 +424,9 @@ CONSERVATIVE ADAPTATION (proposed)
 ```
 
 **Key Insight:** No strategy dominates all three dimensions. The optimal choice depends on domain priorities:
-- **Safety-critical systems** (aerospace, medical devices): proposed (stability > accuracy)
-- **Offline batch prediction** (maintenance scheduling): scheduled (accuracy > churn)
-- **Real-time edge devices** (IoT sensors): naive_adaptive (efficiency > both)
+- **Applications prioritizing stability** (e.g., model audit/certification requirements): proposed (stability > accuracy)
+- **Applications prioritizing accuracy** (e.g., offline batch prediction): scheduled (accuracy > churn)
+- **Applications prioritizing efficiency** (e.g., resource-constrained edge devices): naive_adaptive (efficiency > both)
 
 ### 5.2 Scenario-Level Analysis
 
@@ -437,7 +440,7 @@ Figure 3 shows promotions by scenario:
 - **gradual_drift:** Proposed promotes 1–2 times, scheduled 23 times (invariant across scenarios), naive_adaptive 9–14 times
 - **high_noise:** Noisy scenarios trigger more retraining in naive_adaptive (12 promotions) but gating in proposed filters most out (1–2 promotions)
 
-### 5.3 RQ1: Multi-Channel Drift Detection (Supporting Result)
+### 5.3 Supporting Analysis: Drift Detection Behavior
 
 Table 2 summarizes drift detection activity:
 
@@ -461,10 +464,10 @@ Table 3 analyzes gating behavior in proposed strategy:
 | Metric | Mean ± Std |
 |--------|------------|
 | Candidates generated | 12.17 ± 2.68 |
-| Gate accepts | 1.83 ± 1.05 |
+| Gate accepts | 2.00 ± 1.22 |
 | Gate rejects | 10.17 ± 2.16 |
 | Shadow promotions | 1.83 ± 1.05 |
-| Shadow rejections | 0.00 ± 0.00 |
+| Shadow rejections | 0.17 ± 0.48 |
 | Degraded promotions (total across 96 runs) | 20 |
 | Degraded promotion rate | 45.5% (20/44) |
 
@@ -472,9 +475,9 @@ Table 3 analyzes gating behavior in proposed strategy:
 
 1. **Offline gate is the primary filter:** 83.6% of candidates rejected at gate (10.17 / 12.17)
 
-2. **Shadow evaluation rarely rejects:** Shadow rejection rate is effectively 0%, suggesting most gate-passing candidates also pass shadow evaluation
+2. **Shadow evaluation provides additional filtering:** Shadow rejection rate is 8.5% of gate-accepted candidates (0.17 out of 2.00), indicating that a small fraction of candidates that pass offline validation are filtered during live shadow evaluation
 
-3. **Two-stage gating demonstrates promotion filtering:** The proposed strategy achieves lower model replacement frequency (1.83 vs. 11.67 vs. 23.0 promotions) and filters 83.6% of candidates before promotion. However, this experiment does not quantify safety against genuinely bad or catastrophic candidates, as no deliberately degraded models were injected. The experiment demonstrates the gating protocol's ability to reduce promotion frequency and maintain stability, not its ability to prevent unsafe model deployments under adversarial conditions. Future work should include candidate injection experiments to directly measure false negative rates (bad candidates that bypass gates).
+3. **Two-stage gating demonstrates promotion filtering:** The proposed strategy achieves lower model replacement frequency (1.83 vs. 11.67 vs. 23.0 promotions). The offline gate alone rejects 83.6% of candidates (10.17 out of 12.17); overall, 84.9% are filtered before promotion (10.34 out of 12.17). However, this experiment does not quantify safety against genuinely bad or catastrophic candidates, as no deliberately degraded models were injected. The experiment demonstrates the gating protocol's ability to reduce promotion frequency and maintain stability, not its ability to prevent unsafe model deployments under adversarial conditions. Future work should include candidate injection experiments to directly measure false negative rates (bad candidates that bypass gates).
 
 4. **Degraded promotions indicate validation-production mismatch:** 45.5% of promotions are "degraded" (shadow MAE > validation MAE), but:
    - This indicates validation-production distribution mismatch under non-stationary streams
@@ -523,14 +526,14 @@ This trade-off arises because **drift is gradual and heterogeneous** across scen
 
 ### 6.2 Why Conservative Gating Increases Overhead
 
-The 9× overhead of proposed strategy (46.2s vs. 5.0s) is primarily driven by shadow evaluation latency:
+The 9.2× overhead of proposed strategy compared to naive adaptive (46.2s vs. 5.0s), or 6.9× compared to scheduled (46.2s vs. 6.7s), is primarily driven by shadow evaluation latency:
 
 - Retraining time: ~5–6 seconds (similar across strategies)
 - Shadow window: 20 parallel predictions required
 - In sparse scenarios (e.g., drift_recovery, intermittent_spikes), collecting 20 samples may span 50–100 cycles
 - Total shadow time: 21–105 seconds (mean across scenarios)
 
-This overhead is a **deliberate design trade-off**: shadow evaluation provides statistical confidence that candidates perform well on live, non-stationary streams, not just offline validation data. In resource-constrained edge devices, this cost may be prohibitive, favoring naive adaptive (no shadow overhead) over proposed.
+This overhead is a **deliberate design trade-off**: shadow evaluation provides additional live-stream evidence that candidates perform well on live, non-stationary streams, not just offline validation data. In resource-constrained edge devices, this cost may be prohibitive, favoring naive adaptive (no shadow overhead) over proposed.
 
 ### 6.3 Degraded Promotions Reveal Non-Stationarity Challenges
 
@@ -566,10 +569,10 @@ Our results suggest optimal adaptation policy is **domain-specific**, not univer
 
 Prior physical prognostics work focuses on model architecture (Random Forest, LSTM, CNN) without systematic evaluation of adaptation strategies [2, 3, 12, 17, 22]. Drift detection literature evaluates detection methods in isolation, not integrated with safety-critical promotion protocols [14, 18, 23]. Software canary deployment rarely targets physical streams where validation data itself is non-stationary [5, 7, 11, 20].
 
-Our work uniquely:
+This work contributes:
 1. Integrates drift detection, gating, and shadow evaluation for physical RUL
 2. Quantifies the stability–accuracy trade-off across diverse degradation scenarios
-3. Demonstrates that conservative gating reduces churn 6–13× at the cost of 10–24% higher MAE
+3. Demonstrates that conservative gating reduces churn 6–13× at the cost of 8.5–23.9% higher MAE
 
 ---
 
@@ -689,9 +692,9 @@ Assess whether the stability–accuracy trade-off generalizes across physical do
 
 Adaptive model management for physical prognostics faces a fundamental trade-off between model stability (low replacement frequency) and prediction accuracy (low error under drift). We present an integrated closed-loop architecture combining multi-channel statistical drift detection (ADWIN, KS-test, anomaly detection), autonomous background retraining, and two-stage validation (offline performance gate + live shadow evaluation) for continuous RUL regression on streaming turbofan telemetry.
 
-A comprehensive 96-run controlled experiment (4 strategies × 8 degradation scenarios × 3 seeds, blocked factorial design) on NASA C-MAPSS FD001 demonstrates that conservative multi-gated adaptation reduces model replacement frequency by 6.4–12.6× compared to aggressive baselines (1.83 vs. 11.67 vs. 23.0 promotions per 2400-cycle stream, *p* < 0.001) at the cost of 10–24% higher prediction error (MAE 10.79 vs. 9.94 vs. 8.71, *p* < 0.001) and 9× higher adaptation overhead (46.2s vs. 5.0s, *p* < 0.001).
+A comprehensive 96-run controlled experiment (4 strategies × 8 degradation scenarios × 3 seeds, blocked factorial design) on NASA C-MAPSS FD001 demonstrates that conservative multi-gated adaptation reduces model replacement frequency by 6.4–12.6× compared to aggressive baselines (1.83 vs. 11.67 vs. 23.0 promotions per 2400-cycle stream, *p* < 0.001) at the cost of 8.5–23.9% higher prediction error (MAE 10.79 vs. 9.94 vs. 8.71, *p* < 0.001) and 9.2× higher adaptation overhead than naive adaptive (46.2s vs. 5.0s, *p* < 0.001).
 
-This trade-off is statistically significant across all eight degradation scenarios, suggesting the optimal adaptation policy is domain-specific rather than universally optimal. Safety-critical systems (aerospace, medical devices) may prioritize stability, while offline batch prediction (maintenance scheduling) may prioritize accuracy. Our deterministic reproducibility pipeline with provenance tracking enables exact replication of all 96 experimental runs, advancing reproducible research in adaptive ML.
+This trade-off is statistically significant in the blocked 96-run design spanning all eight degradation scenarios, suggesting the optimal adaptation policy is domain-specific rather than universally optimal. The results indicate that applications prioritizing model stability may prefer conservative adaptation, whereas applications prioritizing prediction accuracy may prefer more aggressive adaptation. Our deterministic reproducibility pipeline with provenance tracking enables exact replication of all 96 experimental runs, advancing reproducible research in adaptive ML.
 
 **Key Takeaway:** More adaptation is not always better. Conservative gating dramatically reduces model churn but requires accepting modestly higher prediction error and substantially higher computational overhead. MLOps practitioners must choose adaptation policies aligned with their domain's operational priorities.
 

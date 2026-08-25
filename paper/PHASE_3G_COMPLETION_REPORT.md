@@ -238,7 +238,7 @@ All 23 reference papers are now properly integrated into the research paper:
 
 ✅ **The paper DOES claim:**
 - Conservative multi-gated adaptation reduces model replacement frequency 6.4–12.6×
-- This comes at the cost of 10–24% higher MAE and 9× higher overhead
+- This comes at the cost of 8.5–23.9% higher MAE and 9.2× higher overhead than naive adaptive (6.9× higher than scheduled)
 - The experiment demonstrates a stability–accuracy–overhead trade-off
 - The optimal adaptation policy is domain-specific, not universally optimal
 - Safety-critical systems may prioritize stability; batch prediction may prioritize accuracy
@@ -349,7 +349,7 @@ The paper explicitly acknowledges limitations that provide opportunities for fut
 
 **Research Questions:** ✅ FINALIZED (3 RQs)
 - RQ1: Model adaptation strategies & RUL accuracy
-- RQ2: Offline validation + shadow evaluation for promotion safety
+- RQ2: Offline validation + shadow evaluation for candidate filtering and model-promotion behavior
 - RQ3: Trade-offs (accuracy, delay, frequency, time)
 - RQ4: Out of scope (Section 7.6 Limitations)
 

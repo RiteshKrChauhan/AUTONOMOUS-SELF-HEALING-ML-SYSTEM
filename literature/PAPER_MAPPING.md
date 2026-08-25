@@ -58,9 +58,9 @@ These 23 papers formed the literature corpus analyzed in NotebookLM. Existing re
 
 ### Usage in Research Paper
 
-These paper IDs (Paper 1–Paper 23) are referenced throughout the research paper draft (`paper/RESEARCH_PAPER_DRAFT.md`). Complete bibliographic citations with authors, years, venues, DOIs, and page numbers should be inserted before submission.
+These paper IDs (Paper 1–Paper 23) are referenced throughout the research paper draft (`paper/RESEARCH_PAPER_DRAFT.md`). All 23 papers have been verified, bibliographic metadata has been extracted and validated, and in-text citations [1]–[23] have been integrated into the research paper.
 
-**Current Status:** Paper IDs normalized and verified. Full bibliographic extraction pending.
+**Current Status:** Paper IDs normalized and verified. Bibliographic metadata complete and integrated into research paper.
 
 ---
 

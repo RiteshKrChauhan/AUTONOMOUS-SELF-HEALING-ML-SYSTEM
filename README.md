@@ -606,7 +606,7 @@ The 96 raw event-level CSVs, 96 per-run summary JSONs, execution logs, and the m
 
 Adaptive model management for physical prognostics faces a fundamental trade-off: aggressive adaptation (frequent retraining) minimizes prediction error but increases model churn and operational risk, while conservative adaptation (rigorous gating) maximizes model stability but may degrade prediction accuracy. This work presents an integrated closed-loop MLOps architecture combining multi-channel statistical drift detection, autonomous background retraining, and two-stage model validation (offline performance gate + live parallel shadow evaluation) for continuous RUL regression on streaming turbofan telemetry.
 
-A comprehensive 96-run controlled experiment (4 strategies × 8 degradation scenarios × 3 seeds, blocked factorial design) on NASA C-MAPSS FD001 demonstrates that conservative multi-gated adaptation achieves 6.4–12.6× lower model replacement frequency than aggressive baselines (1.83 vs. 11.67 vs. 23.0 promotions per 2400-cycle stream, *p* < 0.001) at the cost of 10–24% higher prediction error (MAE 10.79 vs. 9.94 vs. 8.71, *p* < 0.001) and 9× higher adaptation overhead (46.2s vs. 5.0s, *p* < 0.001).
+A comprehensive 96-run controlled experiment (4 strategies × 8 degradation scenarios × 3 seeds, blocked factorial design) on NASA C-MAPSS FD001 demonstrates that conservative multi-gated adaptation achieves 6.4–12.6× lower model replacement frequency than aggressive baselines (1.83 vs. 11.67 vs. 23.0 promotions per 2400-cycle stream, *p* < 0.001) at the cost of 8.5–23.9% higher prediction error (MAE 10.79 vs. 9.94 vs. 8.71, *p* < 0.001) and 9.2× higher adaptation overhead than naive adaptive (46.2s vs. 5.0s, *p* < 0.001).
 
 ### Key Findings
 
@@ -650,7 +650,7 @@ A comprehensive 96-run controlled experiment (4 strategies × 8 degradation scen
 | RQ | Topic | Status |
 |----|-------|--------|
 | RQ1 | Model adaptation strategies and RUL prediction accuracy under non-stationary degradation | ✅ Fully Answered |
-| RQ2 | Safety of model promotion via offline validation + live shadow evaluation | ✅ Fully Answered |
+| RQ2 | Candidate filtering and model-promotion behavior via offline validation + live shadow evaluation | ✅ Fully Answered |
 | RQ3 | Trade-offs (accuracy vs. drift detection delay vs. promotion frequency vs. adaptation time) | ✅ Fully Answered |
 
 **Core Contribution:** RQ3 provides the strongest empirical result—a clear, statistically validated quantification of the stability–accuracy–overhead trade-off across diverse degradation scenarios.
