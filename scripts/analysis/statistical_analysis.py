@@ -538,6 +538,22 @@ def run_statistical_analysis(aggregated_file: Path, manifest_file: Path,
 
 def write_report_json(report: StatisticalAnalysisReport, output_path: Path):
     """Write machine-readable JSON report."""
+    def convert_numpy_types(obj):
+        """Convert numpy types to native Python types for JSON serialization."""
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, dict):
+            return {k: convert_numpy_types(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [convert_numpy_types(item) for item in obj]
+        return obj
+    
     data = {
         "aggregated_file": report.aggregated_file,
         "manifest_file": report.manifest_file,
@@ -558,11 +574,11 @@ def write_report_json(report: StatisticalAnalysisReport, output_path: Path):
         "numpy_version": report.numpy_version,
         "warnings": report.warnings,
         "friedman_tests": {
-            metric: asdict(result)
+            metric: convert_numpy_types(asdict(result))
             for metric, result in report.friedman_tests.items()
         },
         "pairwise_tests": {
-            metric: [asdict(r) for r in results]
+            metric: [convert_numpy_types(asdict(r)) for r in results]
             for metric, results in report.pairwise_tests.items()
         }
     }
